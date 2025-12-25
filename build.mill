@@ -1,6 +1,9 @@
-// build.sc
+//| mvnDeps:
+//| - com.typesafe:config:1.4.2
+package build
+
 import mill._, scalalib._, publish._
-import $file.project.Version
+import build.project.SpinalVersion
 
 trait SpinalModule extends SbtModule with CrossSbtModule { outer =>
   def scalatestVersion = "3.2.14"
@@ -32,7 +35,7 @@ trait SpinalModule extends SbtModule with CrossSbtModule { outer =>
 }
 
 trait SpinalPublishModule extends PublishModule {
-  def publishVersion = Version.SpinalVersion.all
+  def publishVersion = SpinalVersion.all
   def artifactName = "spinalhdl-" + super.artifactName()
 
   def pomSettings = PomSettings(
@@ -47,14 +50,14 @@ trait SpinalPublishModule extends PublishModule {
   )
 }
 
-object idslpayload extends Cross[IdslPayload](Version.SpinalVersion.compilers)
+object idslpayload extends Cross[IdslPayload](SpinalVersion.compilers)
 trait IdslPayload extends SpinalModule with SpinalPublishModule {
   def mainClass = Some("spinal.idslpayload")
   override def artifactName = "spinalhdl-idsl-payload"
   def mvnDeps = super.mvnDeps() ++ Seq(mvn"org.scala-lang:scala-reflect:${scalaVersion}")
 }
 
-object idslplugin extends Cross[IdslPlugin](Version.SpinalVersion.compilers)
+object idslplugin extends Cross[IdslPlugin](SpinalVersion.compilers)
 trait IdslPlugin extends SpinalModule with SpinalPublishModule {
   def mainClass = Some("spinal.idslplugin")
   override def artifactName = "spinalhdl-idsl-plugin"
@@ -63,8 +66,8 @@ trait IdslPlugin extends SpinalModule with SpinalPublishModule {
   def pluginOptions = Task { Seq(s"-Xplugin:${assembly().path}") }
 }
 
-object sim extends Cross[Sim](Version.SpinalVersion.compilers){
-  def defaultCrossSegments = Seq(Version.SpinalVersion.compilers.head)
+object sim extends Cross[Sim](SpinalVersion.compilers){
+  def defaultCrossSegments = Seq(SpinalVersion.compilers.head)
 }
 trait Sim extends SpinalModule with SpinalPublishModule {
   def mainClass = Some("spinal.sim")
@@ -74,11 +77,11 @@ trait Sim extends SpinalModule with SpinalPublishModule {
     mvn"org.slf4j:slf4j-simple:2.0.5",
     mvn"com.github.oshi:oshi-core:6.4.0"
   )
-  def publishVersion = Version.SpinalVersion.sim
+  def publishVersion = SpinalVersion.sim
 }
 
-object lib extends Cross[Lib](Version.SpinalVersion.compilers){
-  def defaultCrossSegments = Seq(Version.SpinalVersion.compilers.head)
+object lib extends Cross[Lib](SpinalVersion.compilers){
+  def defaultCrossSegments = Seq(SpinalVersion.compilers.head)
 }
 trait Lib extends SpinalModule with SpinalPublishModule {
   def mainClass = Some("spinal.lib")
@@ -86,7 +89,7 @@ trait Lib extends SpinalModule with SpinalPublishModule {
   def scalacOptions = super.scalacOptions() ++ idslpluginMod().pluginOptions()
   def mvnDeps = super.mvnDeps() ++ Seq(mvn"commons-io:commons-io:2.11.0", mvn"org.scalatest::scalatest:${scalatestVersion}",
     mvn"io.github.zhaokunhu::ipxactscalacases:0.0.3")
-  def publishVersion = Version.SpinalVersion.lib
+  def publishVersion = SpinalVersion.lib
 }
 
 import sys.process._
@@ -96,8 +99,8 @@ def gitHash(dir: os.Path) = (try {
   case e: java.io.IOException => "???"
 }).linesIterator.next()
 
-object core extends Cross[Core](Version.SpinalVersion.compilers){
-  def defaultCrossSegments = Seq(Version.SpinalVersion.compilers.head)
+object core extends Cross[Core](SpinalVersion.compilers){
+  def defaultCrossSegments = Seq(SpinalVersion.compilers.head)
 }
 trait Core extends SpinalModule with SpinalPublishModule {
   def mainClass = Some("spinal.core")
@@ -110,7 +113,7 @@ trait Core extends SpinalModule with SpinalPublishModule {
     mvn"com.lihaoyi::sourcecode:0.3.0"
   )
 
-  override def generatedSources = T {
+  override def generatedSources = Task {
     val dest = Task.dest / "Info.scala"
     val code =
       s"""package spinal.core
@@ -119,14 +122,14 @@ trait Core extends SpinalModule with SpinalPublishModule {
          |  val name = "%s"
          |  val gitHash = "%s"
          |}
-            |""".stripMargin.format(Version.SpinalVersion.core, mainClass, gitHash(Task.dest))
+            |""".stripMargin.format(SpinalVersion.core, mainClass, gitHash(Task.dest))
     os.write(dest, code, createFolders = true)
     Seq(PathRef(Task.dest))
   }
 }
 
-object tester extends Cross[Tester](Version.SpinalVersion.compilers){
-  def defaultCrossSegments = Seq(Version.SpinalVersion.compilers.head)
+object tester extends Cross[Tester](SpinalVersion.compilers){
+  def defaultCrossSegments = Seq(SpinalVersion.compilers.head)
 }
 trait Tester extends SpinalModule with SpinalPublishModule {
   override def millSourcePath = os.pwd / "tester"
@@ -134,5 +137,5 @@ trait Tester extends SpinalModule with SpinalPublishModule {
   def moduleDeps = Seq(coreMod(), simMod(), libMod())
   def scalacOptions = super.scalacOptions() ++ idslpluginMod().pluginOptions()
   def mvnDeps = super.mvnDeps() ++ Seq(mvn"org.scalatest::scalatest:${scalatestVersion}")
-  def publishVersion = Version.SpinalVersion.tester
+  def publishVersion = SpinalVersion.tester
 }
