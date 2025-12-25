@@ -1,6 +1,5 @@
 // build.sc
 import mill._, scalalib._, publish._
-import mill.define.ModuleRef
 import $file.project.Version
 
 trait SpinalModule extends SbtModule with CrossSbtModule { outer =>
@@ -25,11 +24,11 @@ trait SpinalModule extends SbtModule with CrossSbtModule { outer =>
   // Default definitions for moduleDeps.  For projects that consume us as a
   // foreign module (with a git submodule), override these to avoid building
   // these modules multiple times
-  def coreMod = ModuleRef(core(crossScalaVersion))
-  def libMod = ModuleRef(lib(crossScalaVersion))
-  def simMod = ModuleRef(sim(crossScalaVersion))
-  def idslpayloadMod = ModuleRef(idslpayload(crossScalaVersion))
-  def idslpluginMod = ModuleRef(idslplugin(crossScalaVersion))
+  def coreMod() = core(crossScalaVersion)
+  def libMod() = lib(crossScalaVersion)
+  def simMod() = sim(crossScalaVersion)
+  def idslpayloadMod() = idslpayload(crossScalaVersion)
+  def idslpluginMod() = idslplugin(crossScalaVersion)
 }
 
 trait SpinalPublishModule extends PublishModule {
