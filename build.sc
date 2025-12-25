@@ -16,7 +16,7 @@ trait SpinalModule extends SbtModule with CrossSbtModule { outer =>
     mvn"org.scala-lang.modules::scala-xml:1.3.0"
   )
 
-  object test extends CrossSbtModuleTests with TestModule.ScalaTest {
+  object test extends CrossSbtTests with TestModule.ScalaTest {
     def mvnDeps = Seq(mvn"org.scalatest::scalatest::${scalatestVersion}")
   }
   def testOnly(args: String*) = Task.Command { test.testOnly(args: _*) }
