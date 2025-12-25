@@ -140,7 +140,6 @@ object tester extends Cross[Tester](SpinalVersion.compilers){
 }
 trait Tester extends SpinalModule with SpinalPublishModule {
   import moduleRefs._
-  override def moduleDir = os.pwd / "tester"
   def mainClass = Some("spinal.tester")
   def moduleDeps = Seq(coreMod(), simMod(), libMod())
   def scalacOptions = super.scalacOptions() ++ idslpluginMod().pluginOptions()
