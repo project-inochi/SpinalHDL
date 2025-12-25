@@ -20,7 +20,7 @@ trait SpinalModule extends SbtModule with CrossSbtModule { outer =>
   object test extends CrossSbtModuleTests with TestModule.ScalaTest {
     def mvnDeps = Agg(mvn"org.scalatest::scalatest::${scalatestVersion}")
   }
-  def testOnly(args: String*) = T.command { test.testOnly(args: _*) }
+  def testOnly(args: String*) = Task.Command { test.testOnly(args: _*) }
 
   // Default definitions for moduleDeps.  For projects that consume us as a
   // foreign module (with a git submodule), override these to avoid building
@@ -112,7 +112,7 @@ trait Core extends SpinalModule with SpinalPublishModule {
   )
 
   override def generatedSources = T {
-    val dest = T.dest / "Info.scala"
+    val dest = Task.dest / "Info.scala"
     val code =
       s"""package spinal.core
          |object Info {
@@ -120,9 +120,9 @@ trait Core extends SpinalModule with SpinalPublishModule {
          |  val name = "%s"
          |  val gitHash = "%s"
          |}
-            |""".stripMargin.format(Version.SpinalVersion.core, mainClass, gitHash(T.dest))
+            |""".stripMargin.format(Version.SpinalVersion.core, mainClass, gitHash(Task.dest))
     os.write(dest, code, createFolders = true)
-    Seq(PathRef(T.dest))
+    Seq(PathRef(Task.dest))
   }
 }
 
