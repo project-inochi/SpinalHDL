@@ -8,17 +8,17 @@ trait SpinalModule extends SbtModule with CrossSbtModule { outer =>
   def scalacOptions = super.scalacOptions() ++ Seq("-unchecked", "-target:jvm-1.8")
   def javacOptions = super.javacOptions() ++ Seq("-source", "1.8", "-target", "1.8")
 
-  val IvyDeps = Agg(
-    ivy"org.scala-lang:scala-library:${scalaVersion}",
-    ivy"org.scalactic:scalactic::3.2.10",
-    ivy"net.java.dev.jna:jna:5.12.1",
-    ivy"net.java.dev.jna:jna-platform:5.12.1",
-    ivy"org.slf4j:slf4j-api:2.0.5",
-    ivy"org.scala-lang.modules::scala-xml:1.3.0"
+  val MvnDeps = Agg(
+    mvn"org.scala-lang:scala-library:${scalaVersion}",
+    mvn"org.scalactic:scalactic::3.2.10",
+    mvn"net.java.dev.jna:jna:5.12.1",
+    mvn"net.java.dev.jna:jna-platform:5.12.1",
+    mvn"org.slf4j:slf4j-api:2.0.5",
+    mvn"org.scala-lang.modules::scala-xml:1.3.0"
   )
 
   object test extends CrossSbtModuleTests with TestModule.ScalaTest {
-    def ivyDeps = Agg(ivy"org.scalatest::scalatest::${scalatestVersion}")
+    def mvnDeps = Agg(mvn"org.scalatest::scalatest::${scalatestVersion}")
   }
   def testOnly(args: String*) = T.command { test.testOnly(args: _*) }
 
@@ -52,7 +52,7 @@ object idslpayload extends Cross[IdslPayload](Version.SpinalVersion.compilers)
 trait IdslPayload extends SpinalModule with SpinalPublishModule {
   def mainClass = Some("spinal.idslpayload")
   override def artifactName = "spinalhdl-idsl-payload"
-  def ivyDeps = super.ivyDeps() ++ Agg(ivy"org.scala-lang:scala-reflect:${scalaVersion}")
+  def mvnDeps = super.mvnDeps() ++ Agg(mvn"org.scala-lang:scala-reflect:${scalaVersion}")
 }
 
 object idslplugin extends Cross[IdslPlugin](Version.SpinalVersion.compilers)
@@ -60,7 +60,7 @@ trait IdslPlugin extends SpinalModule with SpinalPublishModule {
   def mainClass = Some("spinal.idslplugin")
   override def artifactName = "spinalhdl-idsl-plugin"
   def moduleDeps = Seq(idslpayloadMod())
-  def ivyDeps = super.ivyDeps() ++ Agg(ivy"org.scala-lang:scala-compiler:${scalaVersion}")
+  def mvnDeps = super.mvnDeps() ++ Agg(mvn"org.scala-lang:scala-compiler:${scalaVersion}")
   def pluginOptions = T { Seq(s"-Xplugin:${assembly().path}") }
 }
 
@@ -69,11 +69,11 @@ object sim extends Cross[Sim](Version.SpinalVersion.compilers){
 }
 trait Sim extends SpinalModule with SpinalPublishModule {
   def mainClass = Some("spinal.sim")
-  def ivyDeps = super.ivyDeps() ++ Agg(
-    ivy"commons-io:commons-io:2.11.0",
-    ivy"net.openhft:affinity:3.23.2",
-    ivy"org.slf4j:slf4j-simple:2.0.5",
-    ivy"com.github.oshi:oshi-core:6.4.0"
+  def mvnDeps = super.mvnDeps() ++ Agg(
+    mvn"commons-io:commons-io:2.11.0",
+    mvn"net.openhft:affinity:3.23.2",
+    mvn"org.slf4j:slf4j-simple:2.0.5",
+    mvn"com.github.oshi:oshi-core:6.4.0"
   )
   def publishVersion = Version.SpinalVersion.sim
 }
@@ -85,8 +85,8 @@ trait Lib extends SpinalModule with SpinalPublishModule {
   def mainClass = Some("spinal.lib")
   def moduleDeps = Seq(coreMod(), simMod())
   def scalacOptions = super.scalacOptions() ++ idslpluginMod().pluginOptions()
-  def ivyDeps = super.ivyDeps() ++ Agg(ivy"commons-io:commons-io:2.11.0", ivy"org.scalatest::scalatest:${scalatestVersion}",
-    ivy"io.github.zhaokunhu::ipxactscalacases:0.0.3")
+  def mvnDeps = super.mvnDeps() ++ Agg(mvn"commons-io:commons-io:2.11.0", mvn"org.scalatest::scalatest:${scalatestVersion}",
+    mvn"io.github.zhaokunhu::ipxactscalacases:0.0.3")
   def publishVersion = Version.SpinalVersion.lib
 }
 
@@ -105,10 +105,10 @@ trait Core extends SpinalModule with SpinalPublishModule {
   def moduleDeps = Seq(idslpluginMod(), simMod())
 
   def scalacOptions = super.scalacOptions() ++ idslpluginMod().pluginOptions()
-  def ivyDeps = super.ivyDeps() ++ Agg(
-    ivy"org.scala-lang:scala-reflect:${scalaVersion}",
-    ivy"com.github.scopt::scopt:4.1.0",
-    ivy"com.lihaoyi::sourcecode:0.3.0"
+  def mvnDeps = super.mvnDeps() ++ Agg(
+    mvn"org.scala-lang:scala-reflect:${scalaVersion}",
+    mvn"com.github.scopt::scopt:4.1.0",
+    mvn"com.lihaoyi::sourcecode:0.3.0"
   )
 
   override def generatedSources = T {
@@ -134,6 +134,6 @@ trait Tester extends SpinalModule with SpinalPublishModule {
   def mainClass = Some("spinal.tester")
   def moduleDeps = Seq(coreMod(), simMod(), libMod())
   def scalacOptions = super.scalacOptions() ++ idslpluginMod().pluginOptions()
-  def ivyDeps = super.ivyDeps() ++ Agg(ivy"org.scalatest::scalatest:${scalatestVersion}")
+  def mvnDeps = super.mvnDeps() ++ Agg(mvn"org.scalatest::scalatest:${scalatestVersion}")
   def publishVersion = Version.SpinalVersion.tester
 }
