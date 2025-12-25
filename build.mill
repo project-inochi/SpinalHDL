@@ -22,7 +22,7 @@ trait SpinalModule extends SbtModule with CrossSbtModule { outer =>
   object test extends CrossSbtTests with TestModule.ScalaTest {
     def mvnDeps = Seq(mvn"org.scalatest::scalatest::${scalatestVersion}")
   }
-  def testOnly(args: String*) = Task.Command { test.testOnly(args*) }
+  def testOnly(args: String*) = test.testOnly(args*)
 
   // Default definitions for moduleDeps.  For projects that consume us as a
   // foreign module (with a git submodule), override these to avoid building
