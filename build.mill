@@ -24,6 +24,10 @@ trait SpinalModule extends SbtModule with CrossSbtModule { outer =>
   }
   def testOnly(args: String*) = test.testOnly(args*)
 
+  val moduleRefs = SpinalModuleRef(crossScalaVersion)
+}
+
+case class SpinalModuleRef(crossScalaVersion: String) {
   // Default definitions for moduleDeps.  For projects that consume us as a
   // foreign module (with a git submodule), override these to avoid building
   // these modules multiple times
@@ -59,6 +63,7 @@ trait IdslPayload extends SpinalModule with SpinalPublishModule {
 
 object idslplugin extends Cross[IdslPlugin](SpinalVersion.compilers)
 trait IdslPlugin extends SpinalModule with SpinalPublishModule {
+  import moduleRefs._
   def mainClass = Some("spinal.idslplugin")
   override def artifactName = "spinalhdl-idsl-plugin"
   def moduleDeps = Seq(idslpayloadMod())
@@ -84,6 +89,7 @@ object lib extends Cross[Lib](SpinalVersion.compilers){
   def defaultCrossSegments = Seq(SpinalVersion.compilers.head)
 }
 trait Lib extends SpinalModule with SpinalPublishModule {
+  import moduleRefs._
   def mainClass = Some("spinal.lib")
   def moduleDeps = Seq(coreMod(), simMod())
   def scalacOptions = super.scalacOptions() ++ idslpluginMod().pluginOptions()
@@ -103,6 +109,7 @@ object core extends Cross[Core](SpinalVersion.compilers){
   def defaultCrossSegments = Seq(SpinalVersion.compilers.head)
 }
 trait Core extends SpinalModule with SpinalPublishModule {
+  import moduleRefs._
   def mainClass = Some("spinal.core")
   def moduleDeps = Seq(idslpluginMod(), simMod())
 
@@ -132,6 +139,7 @@ object tester extends Cross[Tester](SpinalVersion.compilers){
   def defaultCrossSegments = Seq(SpinalVersion.compilers.head)
 }
 trait Tester extends SpinalModule with SpinalPublishModule {
+  import moduleRefs._
   override def moduleDir = os.pwd / "tester"
   def mainClass = Some("spinal.tester")
   def moduleDeps = Seq(coreMod(), simMod(), libMod())
