@@ -36,6 +36,7 @@ case class SpinalModuleRef(crossScalaVersion: String) {
   def simMod() = sim(crossScalaVersion)
   def idslpayloadMod() = idslpayload(crossScalaVersion)
   def idslpluginMod() = idslplugin(crossScalaVersion)
+  def testerMod() = tester(crossScalaVersion)
 }
 
 trait SpinalPublishModule extends PublishModule {
