@@ -58,7 +58,14 @@ case class APlicMSITestFiber(hartIds: Seq[Int], sourceIds: Seq[Int], guestIds: S
   val crossBar = tilelink.fabric.Node()
   crossBar << masterBus.node
 
-  val blocks = hartIds.map(hartId => for (guestId <- guestIds) yield new SxAIABlock(sourceIds, hartId, guestId))
+  val blocks = hartIds.map(hartId => for (guestId <- guestIds) yield new ImsicFile(hartId, guestId, sourceIds))
+
+  blocks.flatten.foreach(block => {
+    block.interrupts.foreach(interrupt => {
+      interrupt.ie.simPublic()
+      interrupt.ip.simPublic()
+    })
+  })
 
   val modes = ArrayBuffer[SpinalEnumElement[APlicSourceMode.type]]()
 
@@ -96,7 +103,7 @@ case class APlicMSITestFiber(hartIds: Seq[Int], sourceIds: Seq[Int], guestIds: S
     for (hartBlock <- blocks) {
       for (block <- hartBlock) {
         val trigger = imsic.addImsicFileinfo(block.asImsicFileInfo())
-        val connector = SxAIABlockTrigger(block, trigger)
+        block.triggers := trigger
       }
     }
 
@@ -1029,64 +1036,6 @@ object APlicTestHelper {
     assert(data.testBit(id) == expect,
     s"\n  $name: check IO bit failed:\n  data = 0x${data.toString(16)}\n  bit index = $id\n  expected = $expect\n"
     )
-  }
-}
-
-case class SxAIAInterruptSource(sourceId: Int) extends Area {
-  val id = sourceId
-  val ie = RegInit(False)
-  val ip = RegInit(False)
-
-  val profile = new Area {
-    val en = RegInit(False)
-    val counter = Counter(32 bits, en && !ip)
-    val latency = counter.value
-
-    when (!en) {
-      counter.clear()
-    }
-
-    en.simPublic()
-    latency.simPublic()
-  }
-
-  ie.simPublic()
-  ip.simPublic()
-}
-
-case class SxAIABlock(sourceIds: Seq[Int], hartId: Int, guestId: Int) extends Area {
-  val interrupts = for (sourceId <- sourceIds) yield new SxAIAInterruptSource(sourceId)
-
-  def asImsicFileInfo(groupId: Int, groupHartId: Int): ImsicFileInfo = ImsicFileInfo(
-    hartId      = hartId,
-    guestId     = guestId,
-    sourceIds   = interrupts.map(_.id),
-    groupId     = groupId,
-    groupHartId = groupHartId
-  )
-
-  def asImsicFileInfo(hartPerGroup: Int = 0): ImsicFileInfo = {
-    val info = if (hartPerGroup == 0) {
-      asImsicFileInfo(
-        groupId     = 0,
-        groupHartId = hartId
-      )
-    } else {
-      asImsicFileInfo(
-        groupId     = hartId / hartPerGroup,
-        groupHartId = hartId % hartPerGroup
-      )
-    }
-
-    info
-  }
-}
-
-case class SxAIABlockTrigger(block: SxAIABlock, triggers: Bits) extends Area {
-  for ((interrupt, trigger) <- block.interrupts.zip(triggers.asBools)) {
-    when(trigger) {
-      interrupt.ip := True
-    }
   }
 }
 
