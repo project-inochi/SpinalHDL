@@ -585,10 +585,12 @@ class Hub(p : HubParameters) extends Component{
 
 
       val counter = Reg(UInt(wordRange.size bits)) init(0)
-      when(isFiring){
-        counter := counter + 1
-        when(LAST){
-          counter := 0
+      if(wordRange.size != 0) {
+        when(isFiring){
+          counter := counter + 1
+          when(LAST){
+            counter := 0
+          }
         }
       }
 
