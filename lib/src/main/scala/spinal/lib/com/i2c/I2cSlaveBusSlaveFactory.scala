@@ -46,10 +46,13 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
   val rxShift = Reg(Bits(8 bits)) init(0)
   val rxByte = Reg(Bits(8 bits)) init(0)
 
-  val ackPending = RegInit(False)
-  val ackIssued = RegInit(False)
-  val ackEnable = RegInit(False)
-  val ackData = RegInit(True)
+  val ack = new Area {
+    val pending = RegInit(False)
+    val issued = RegInit(False)
+    val enable = RegInit(False)
+    val data = RegInit(True)
+  }
+
   val nextPhase = Reg(I2cSlaveBusSlaveFactoryPhase()) init(ADDRESS)
 
   val txByte = Reg(Bits(8 bits)) init(0)
@@ -127,36 +130,36 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
         bus.rsp.data := True
       }
       default {
-        when(ackPending) {
-          when(!ackIssued) {
+        when(ack.pending) {
+          when(!ack.issued) {
             switch(phase) {
               is(ADDRESS) {
                 when(!addressMatched) {
-                  ackIssued := True
-                  ackEnable := False
-                  ackData := True
+                  ack.issued := True
+                  ack.enable := False
+                  ack.data := True
                   nextPhase := WAIT_STOP
                 } elsewhen (addressRead) {
                   askReadCmd := True
                   when(!readHaltRequest && !nackOnUnmappedRead) {
                     txByte := readDataCmd
                     txByteLoaded := True
-                    ackIssued := True
-                    ackEnable := True
-                    ackData := False
+                    ack.issued := True
+                    ack.enable := True
+                    ack.data := False
                     nextPhase := READ
                   } elsewhen (!readHaltRequest) {
-                    ackIssued := True
-                    ackEnable := False
-                    ackData := True
+                    ack.issued := True
+                    ack.enable := False
+                    ack.data := True
                     nextPhase := WAIT_STOP
                   }
                 } otherwise {
                   stagedPointer := 0
                   registerBytesLeft := registerAddressByteCount
-                  ackIssued := True
-                  ackEnable := True
-                  ackData := False
+                  ack.issued := True
+                  ack.enable := True
+                  ack.data := False
                   nextPhase := REGISTER
                 }
               }
@@ -170,16 +173,16 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
                   registerBytesLeft := registerBytesLeft - 1
                   nextPhase := REGISTER
                 }
-                ackIssued := True
-                ackEnable := True
-                ackData := False
+                ack.issued := True
+                ack.enable := True
+                ack.data := False
               }
               is(WRITE) {
                 askWriteCmd := True
                 when(!writeHaltRequest) {
-                  ackIssued := True
-                  ackEnable := !nackOnUnmappedWrite
-                  ackData := False
+                  ack.issued := True
+                  ack.enable := !nackOnUnmappedWrite
+                  ack.data := False
                   when(nackOnUnmappedWrite) {
                     nextPhase := WAIT_STOP
                   } otherwise {
@@ -196,10 +199,10 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
             }
           }
 
-          when(ackIssued) {
+          when(ack.issued) {
             bus.rsp.valid := True
-            bus.rsp.enable := ackEnable
-            bus.rsp.data := ackData
+            bus.rsp.enable := ack.enable
+            bus.rsp.data := ack.data
           }
         }
       }
@@ -210,10 +213,10 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
     phase := ADDRESS
     rxBitCounter := 0
     rxShift := 0
-    ackPending := False
-    ackIssued := False
-    ackEnable := False
-    ackData := True
+    ack.pending := False
+    ack.issued := False
+    ack.enable := False
+    ack.data := True
     nextPhase := ADDRESS
     txAwaitMasterAck := False
     txByteLoaded := False
@@ -253,10 +256,10 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
       is(WAIT_STOP) {
       }
       default {
-        when(ackPending) {
-          when(ackIssued) {
-            ackPending := False
-            ackIssued := False
+        when(ack.pending) {
+          when(ack.issued) {
+            ack.pending := False
+            ack.issued := False
             rxBitCounter := 0
             phase := nextPhase
           }
@@ -264,8 +267,8 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
           rxShift := receivedByte
           when(rxBitCounter === 7) {
             rxByte := receivedByte
-            ackPending := True
-            ackIssued := False
+            ack.pending := True
+            ack.issued := False
             rxBitCounter := 0
           } otherwise {
             rxBitCounter := rxBitCounter + 1

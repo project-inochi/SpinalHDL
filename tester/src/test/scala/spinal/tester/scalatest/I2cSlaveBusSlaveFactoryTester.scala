@@ -28,8 +28,8 @@ object I2cSlaveBusSlaveFactoryTester {
       )
     )
     busCtrl.phase.simPublic()
-    busCtrl.ackPending.simPublic()
-    busCtrl.ackIssued.simPublic()
+    busCtrl.ack.pending.simPublic()
+    busCtrl.ack.issued.simPublic()
     busCtrl.txByteLoaded.simPublic()
     busCtrl.txAwaitMasterAck.simPublic()
     busCtrl.rxByte.simPublic()
@@ -103,8 +103,8 @@ object I2cSlaveBusSlaveFactoryTester {
     )
 
     busCtrl.phase.simPublic()
-    busCtrl.ackPending.simPublic()
-    busCtrl.ackIssued.simPublic()
+    busCtrl.ack.pending.simPublic()
+    busCtrl.ack.issued.simPublic()
     busCtrl.txByteLoaded.simPublic()
     busCtrl.txAwaitMasterAck.simPublic()
     busCtrl.rxByte.simPublic()
@@ -176,8 +176,8 @@ class I2cSlaveBusSlaveFactorySimTester extends SpinalSimFunSuite {
       SimTimeout(200000)
 
       def busState = {
-        s"phase=${dut.busCtrl.phase.toBigInt} ackPending=${dut.busCtrl.ackPending.toBoolean} " +
-          s"ackIssued=${dut.busCtrl.ackIssued.toBoolean} txLoaded=${dut.busCtrl.txByteLoaded.toBoolean} " +
+        s"phase=${dut.busCtrl.phase.toBigInt} ack.pending=${dut.busCtrl.ack.pending.toBoolean} " +
+          s"ack.issued=${dut.busCtrl.ack.issued.toBoolean} txLoaded=${dut.busCtrl.txByteLoaded.toBoolean} " +
           s"txAwaitAck=${dut.busCtrl.txAwaitMasterAck.toBoolean} rxByte=0x${dut.busCtrl.rxByte.toBigInt.toString(16)}"
       }
 
