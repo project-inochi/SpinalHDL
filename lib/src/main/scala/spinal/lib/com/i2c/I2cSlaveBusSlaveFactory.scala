@@ -32,22 +32,22 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
   val loaded = Reg(B(0, 8 bit))
 
   val bitCounter = new Area {
-    val value = Reg(U(0, 3 bit))
-    def last = value.andR
+    val value = Reg(U(7, 3 bit))
+    def last = !value.orR
 
-    def reset() = value := 0
+    def reset() = value := 7
 
     def count() = {
       loaded(value) := bus.cmd.data
       when(last) {
         reset()
       } otherwise {
-        value := value + 1
+        value := value - 1
       }
     }
   }
 
-  val rxByte = loaded.reversed
+  val rxByte = loaded
 
   val ack = new Area {
     val pending = RegInit(False)
@@ -108,7 +108,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
         } otherwise {
           bus.rsp.valid := True
           bus.rsp.enable := True
-          bus.rsp.data := txByte(7 - bitCounter.value)
+          bus.rsp.data := txByte(bitCounter.value)
         }
       }
       is(WAIT_STOP) {
