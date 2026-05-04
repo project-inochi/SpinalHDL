@@ -65,7 +65,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
 
   val nextPhase = Reg(I2cSlaveBusSlaveFactoryPhase()) init(ADDRESS)
 
-  val txByte = Reg(Bits(8 bits)) init(0)
+  val txByte = Reg(B(0, 8 bits))
   val txByteLoaded = RegInit(False)
   val txAwaitMasterAck = RegInit(False)
 
@@ -137,30 +137,24 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
           when(!ack.issued) {
             switch(phase) {
               is(ADDRESS) {
+                val response = !addressMatched || (addressRead && nackOnUnmappedRead)
+                ack.issued := True
+                ack.enable := !response
+                ack.data   := response
+
+                val isRead = !addressMatched && addressRead
+                askReadCmd := !addressMatched && addressRead
+
+                when (isRead && !nackOnUnmappedRead) {
+                  txByte := readDataCmd
+                  txByteLoaded := True
+                }
+
                 when(!addressMatched) {
-                  ack.issued := True
-                  ack.enable := False
-                  ack.data := True
                   nextPhase := WAIT_STOP
                 } elsewhen (addressRead) {
-                  askReadCmd := True
-                  when(!nackOnUnmappedRead) {
-                    txByte := readDataCmd
-                    txByteLoaded := True
-                    ack.issued := True
-                    ack.enable := True
-                    ack.data := False
-                    nextPhase := READ
-                  } otherwise {
-                    ack.issued := True
-                    ack.enable := False
-                    ack.data := True
-                    nextPhase := WAIT_STOP
-                  }
+                  nextPhase := Mux(nackOnUnmappedRead, WAIT_STOP, READ)
                 } otherwise {
-                  ack.issued := True
-                  ack.enable := True
-                  ack.data := False
                   nextPhase := REGISTER
                 }
               }
@@ -220,12 +214,14 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
       is(READ) {
         when(txAwaitMasterAck) {
           doReadCmd := True
-          if (autoIncrementEnabled) {
-            currentPointer := currentPointer + 1
-          }
           txAwaitMasterAck := False
           txByteLoaded := False
           bitCounter.reset()
+
+          if (autoIncrementEnabled) {
+            currentPointer := currentPointer + 1
+          }
+
           when(bus.cmd.data) {
             phase := WAIT_STOP
           }
@@ -236,8 +232,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
           }
         }
       }
-      is(WAIT_STOP) {
-      }
+      is(WAIT_STOP) { }
       default {
         when(ack.pending) {
           when(ack.issued) {
