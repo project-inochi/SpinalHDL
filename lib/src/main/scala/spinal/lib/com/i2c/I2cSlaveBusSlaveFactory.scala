@@ -79,8 +79,6 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
   val doWriteCmd = False
   val doReadCmd = False
   val hitAny = False
-  val readHaltRequest = False
-  val writeHaltRequest = False
 
   val writeDataCmd = Bits(8 bits)
   val readDataCmd = Bits(8 bits)
@@ -95,8 +93,8 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
   override def readFire(): Bool = doReadCmd
   override def writeFire(): Bool = doWriteCmd
 
-  override def readHalt(): Unit = readHaltRequest := True
-  override def writeHalt(): Unit = writeHaltRequest := True
+  override def readHalt(): Unit = {}
+  override def writeHalt(): Unit = {}
 
   bus.rsp.valid := False
   bus.rsp.enable := False
@@ -128,10 +126,8 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
           bus.rsp.data := True
         } elsewhen (!txByteLoaded) {
           askReadCmd := True
-          when(!readHaltRequest) {
-            txByte := readDataCmd
-            txByteLoaded := True
-          }
+          txByte := readDataCmd
+          txByteLoaded := True
         } otherwise {
           bus.rsp.valid := True
           bus.rsp.enable := True
@@ -155,14 +151,14 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
                   nextPhase := WAIT_STOP
                 } elsewhen (addressRead) {
                   askReadCmd := True
-                  when(!readHaltRequest && !nackOnUnmappedRead) {
+                  when(!nackOnUnmappedRead) {
                     txByte := readDataCmd
                     txByteLoaded := True
                     ack.issued := True
                     ack.enable := True
                     ack.data := False
                     nextPhase := READ
-                  } elsewhen (!readHaltRequest) {
+                  } otherwise {
                     ack.issued := True
                     ack.enable := False
                     ack.data := True
@@ -193,20 +189,18 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
               }
               is(WRITE) {
                 askWriteCmd := True
-                when(!writeHaltRequest) {
-                  ack.issued := True
-                  ack.enable := !nackOnUnmappedWrite
-                  ack.data := False
-                  when(nackOnUnmappedWrite) {
-                    nextPhase := WAIT_STOP
-                  } otherwise {
-                    nextPhase := WRITE
-                  }
-                  when(!nackOnUnmappedWrite) {
-                    doWriteCmd := True
-                    if (autoIncrementEnabled) {
-                      currentPointer := currentPointer + 1
-                    }
+                ack.issued := True
+                ack.enable := !nackOnUnmappedWrite
+                ack.data := False
+                when(nackOnUnmappedWrite) {
+                  nextPhase := WAIT_STOP
+                } otherwise {
+                  nextPhase := WRITE
+                }
+                when(!nackOnUnmappedWrite) {
+                  doWriteCmd := True
+                  if (autoIncrementEnabled) {
+                    currentPointer := currentPointer + 1
                   }
                 }
               }
