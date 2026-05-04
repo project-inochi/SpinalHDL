@@ -99,6 +99,8 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
   val registerByteIsLast = registerBytesLeft === 1
   val nackOnUnmappedWrite = if (nackOnUnmappedWriteEnabled) !hitAny else False
   val nackOnUnmappedRead = if (nackOnUnmappedReadEnabled) !hitAny else False
+  val frameStart = bus.cmd.kind === I2cSlaveCmdMode.START || bus.cmd.kind === I2cSlaveCmdMode.RESTART
+  val frameStop = bus.cmd.kind === I2cSlaveCmdMode.STOP || bus.cmd.kind === I2cSlaveCmdMode.DROP
 
   when(bus.cmd.kind === I2cSlaveCmdMode.DRIVE) {
     switch(phase) {
@@ -204,57 +206,26 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
     }
   }
 
+  when (frameStart || frameStop) {
+    phase := ADDRESS
+    rxBitCounter := 0
+    rxShift := 0
+    ackPending := False
+    ackIssued := False
+    ackEnable := False
+    ackData := True
+    nextPhase := ADDRESS
+    txAwaitMasterAck := False
+    txByteLoaded := False
+    stagedPointer := 0
+    registerBytesLeft := 0
+  }
+
+  if (!cfg.retainAddressPointerOnStop) when (frameStop) {
+    currentPointer := 0
+  }
+
   switch(bus.cmd.kind) {
-    is(I2cSlaveCmdMode.START) {
-      phase := ADDRESS
-      rxBitCounter := 0
-      rxShift := 0
-      ackPending := False
-      ackIssued := False
-      txAwaitMasterAck := False
-      txByteLoaded := False
-      stagedPointer := 0
-      registerBytesLeft := 0
-    }
-    is(I2cSlaveCmdMode.RESTART) {
-      phase := ADDRESS
-      rxBitCounter := 0
-      rxShift := 0
-      ackPending := False
-      ackIssued := False
-      txAwaitMasterAck := False
-      txByteLoaded := False
-      stagedPointer := 0
-      registerBytesLeft := 0
-    }
-    is(I2cSlaveCmdMode.STOP) {
-      phase := ADDRESS
-      rxBitCounter := 0
-      rxShift := 0
-      ackPending := False
-      ackIssued := False
-      txAwaitMasterAck := False
-      txByteLoaded := False
-      stagedPointer := 0
-      registerBytesLeft := 0
-      if (!cfg.retainAddressPointerOnStop) {
-        currentPointer := 0
-      }
-    }
-    is(I2cSlaveCmdMode.DROP) {
-      phase := ADDRESS
-      rxBitCounter := 0
-      rxShift := 0
-      ackPending := False
-      ackIssued := False
-      txAwaitMasterAck := False
-      txByteLoaded := False
-      stagedPointer := 0
-      registerBytesLeft := 0
-      if (!cfg.retainAddressPointerOnStop) {
-        currentPointer := 0
-      }
-    }
     is(I2cSlaveCmdMode.READ) {
       switch(phase) {
         is(READ) {
