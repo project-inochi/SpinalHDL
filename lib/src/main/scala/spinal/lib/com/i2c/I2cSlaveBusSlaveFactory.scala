@@ -42,9 +42,24 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
   val stagedPointer = Reg(UInt(cfg.registerAddressWidth bits)) init(0)
   val registerBytesLeft = Reg(UInt(registerAddressCounterWidth bits)) init(0)
 
-  val rxBitCounter = Reg(UInt(3 bits)) init(0)
-  val rxShift = Reg(Bits(8 bits)) init(0)
-  val rxByte = Reg(Bits(8 bits)) init(0)
+  val bitCounter = new Area {
+    val value = Reg(U(0, 3 bit))
+    val loaded = Reg(B(0, 8 bit))
+    def last = value.andR
+
+    def reset() = value := 0
+
+    def count() = {
+      loaded(value) := bus.cmd.data
+      when(last) {
+        reset()
+      } otherwise {
+        value := value + 1
+      }
+    }
+  }
+
+  val rxByte = bitCounter.loaded.reversed
 
   val ack = new Area {
     val pending = RegInit(False)
@@ -95,7 +110,6 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
     (((pointer |<< 8).resized) | byte.asUInt.resized).resized
   }
 
-  val receivedByte = (rxShift(6 downto 0) ## bus.cmd.data).asBits
   val addressMatched = rxByte(7 downto 1) === slaveAddressBits
   val addressRead = rxByte(0)
   val stagedPointerNext = pointerShifted(stagedPointer, rxByte)
@@ -121,7 +135,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
         } otherwise {
           bus.rsp.valid := True
           bus.rsp.enable := True
-          bus.rsp.data := txByte(7 - rxBitCounter)
+          bus.rsp.data := txByte(7 - bitCounter.value)
         }
       }
       is(WAIT_STOP) {
@@ -191,7 +205,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
                   when(!nackOnUnmappedWrite) {
                     doWriteCmd := True
                     if (autoIncrementEnabled) {
-                      currentPointer := pointerIncremented(currentPointer)
+                      currentPointer := currentPointer + 1
                     }
                   }
                 }
@@ -211,8 +225,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
 
   when (frameStart || frameStop) {
     phase := ADDRESS
-    rxBitCounter := 0
-    rxShift := 0
+
     ack.pending := False
     ack.issued := False
     ack.enable := False
@@ -222,7 +235,10 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
     txByteLoaded := False
     stagedPointer := 0
     registerBytesLeft := 0
+
+    bitCounter.reset()
   }
+
 
   if (!cfg.retainAddressPointerOnStop) when (frameStop) {
     currentPointer := 0
@@ -234,22 +250,18 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
         when(txAwaitMasterAck) {
           doReadCmd := True
           if (autoIncrementEnabled) {
-            currentPointer := pointerIncremented(currentPointer)
+            currentPointer := currentPointer + 1
           }
           txAwaitMasterAck := False
           txByteLoaded := False
-          rxBitCounter := 0
+          bitCounter.reset()
           when(bus.cmd.data) {
             phase := WAIT_STOP
           }
         } otherwise {
           when(txByteLoaded) {
-            when(rxBitCounter === 7) {
-              txAwaitMasterAck := True
-              rxBitCounter := 0
-            } otherwise {
-              rxBitCounter := rxBitCounter + 1
-            }
+            bitCounter.count()
+            txAwaitMasterAck.setWhen(bitCounter.last)
           }
         }
       }
@@ -260,18 +272,14 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
           when(ack.issued) {
             ack.pending := False
             ack.issued := False
-            rxBitCounter := 0
+            bitCounter.reset()
             phase := nextPhase
           }
         } otherwise {
-          rxShift := receivedByte
-          when(rxBitCounter === 7) {
-            rxByte := receivedByte
+          bitCounter.count()
+          when(bitCounter.last) {
             ack.pending := True
             ack.issued := False
-            rxBitCounter := 0
-          } otherwise {
-            rxBitCounter := rxBitCounter + 1
           }
         }
       }
