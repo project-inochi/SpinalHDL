@@ -26,16 +26,10 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
 
   require(cfg.slaveAddress >= 0 && cfg.slaveAddress < 128, s"Invalid 7-bit I2C slave address ${cfg.slaveAddress}")
 
-  val registerAddressWidth = 8
-
-  private val slaveAddressBits = B(cfg.slaveAddress, 7 bits)
-  private val autoIncrementEnabled = cfg.autoIncrement
-  private val nackOnUnmappedReadEnabled = cfg.nackOnUnmappedRead
-  private val nackOnUnmappedWriteEnabled = cfg.nackOnUnmappedWrite
+  val slaveAddressBits = B(cfg.slaveAddress, 7 bits)
 
   val phase = Reg(I2cSlaveBusSlaveFactoryPhase()) init(ADDRESS)
-  val currentAddress = Reg(UInt(registerAddressWidth bits)) init(0)
-  val stagedPointer = Reg(UInt(registerAddressWidth bits)) init(0)
+  val currentAddress = Reg(UInt(8 bits)) init(0)
 
   val bitCounter = new Area {
     val value = Reg(U(0, 3 bit))
@@ -95,18 +89,10 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
   bus.rsp.enable := False
   bus.rsp.data := True
 
-  private def pointerIncremented(pointer: UInt): UInt = {
-    (pointer + 1).resized
-  }
-
-  private def pointerShifted(pointer: UInt, byte: Bits): UInt = {
-    (((pointer |<< 8).resized) | byte.asUInt.resized).resized
-  }
-
   val addressMatched = rxByte(7 downto 1) === slaveAddressBits
   val addressRead = rxByte(0)
-  val nackOnUnmappedWrite = if (nackOnUnmappedWriteEnabled) !hitAny else False
-  val nackOnUnmappedRead = if (nackOnUnmappedReadEnabled) !hitAny else False
+  val nackOnUnmappedWrite = if (cfg.nackOnUnmappedWrite) !hitAny else False
+  val nackOnUnmappedRead = if (cfg.nackOnUnmappedRead) !hitAny else False
   val frameStart = bus.cmd.kind === I2cSlaveCmdMode.START || bus.cmd.kind === I2cSlaveCmdMode.RESTART
   val frameStop = bus.cmd.kind === I2cSlaveCmdMode.STOP || bus.cmd.kind === I2cSlaveCmdMode.DROP
 
@@ -177,7 +163,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
                 }
                 when(!nackOnUnmappedWrite) {
                   doWriteCmd := True
-                  if (autoIncrementEnabled) {
+                  if (cfg.autoIncrement) {
                     currentAddress := currentAddress + 1
                   }
                 }
@@ -218,7 +204,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
           txByteLoaded := False
           bitCounter.reset()
 
-          if (autoIncrementEnabled) {
+          if (cfg.autoIncrement) {
             currentAddress := currentAddress + 1
           }
 
