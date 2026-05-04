@@ -29,9 +29,6 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
   require(cfg.slaveAddress >= 0 && cfg.slaveAddress < 128, s"Invalid 7-bit I2C slave address ${cfg.slaveAddress}")
   require(cfg.registerAddressWidth >= 8 && cfg.registerAddressWidth % 8 == 0, "registerAddressWidth must be a multiple of 8 bits")
 
-  private val registerAddressByteCount = cfg.registerAddressWidth / 8
-  private val registerAddressCounterWidth = log2Up(registerAddressByteCount + 1) max 1
-
   private val slaveAddressBits = B(cfg.slaveAddress, 7 bits)
   private val autoIncrementEnabled = cfg.autoIncrement
   private val nackOnUnmappedReadEnabled = cfg.nackOnUnmappedRead
@@ -40,7 +37,6 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
   val phase = Reg(I2cSlaveBusSlaveFactoryPhase()) init(ADDRESS)
   val currentPointer = Reg(UInt(cfg.registerAddressWidth bits)) init(0)
   val stagedPointer = Reg(UInt(cfg.registerAddressWidth bits)) init(0)
-  val registerBytesLeft = Reg(UInt(registerAddressCounterWidth bits)) init(0)
 
   val bitCounter = new Area {
     val value = Reg(U(0, 3 bit))
@@ -110,8 +106,6 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
 
   val addressMatched = rxByte(7 downto 1) === slaveAddressBits
   val addressRead = rxByte(0)
-  val stagedPointerNext = pointerShifted(stagedPointer, rxByte)
-  val registerByteIsLast = registerBytesLeft === 1
   val nackOnUnmappedWrite = if (nackOnUnmappedWriteEnabled) !hitAny else False
   val nackOnUnmappedRead = if (nackOnUnmappedReadEnabled) !hitAny else False
   val frameStart = bus.cmd.kind === I2cSlaveCmdMode.START || bus.cmd.kind === I2cSlaveCmdMode.RESTART
@@ -165,8 +159,6 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
                     nextPhase := WAIT_STOP
                   }
                 } otherwise {
-                  stagedPointer := 0
-                  registerBytesLeft := registerAddressByteCount
                   ack.issued := True
                   ack.enable := True
                   ack.data := False
@@ -174,15 +166,8 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
                 }
               }
               is(REGISTER) {
-                stagedPointer := stagedPointerNext
-                when(registerByteIsLast) {
-                  currentPointer := stagedPointerNext
-                  registerBytesLeft := 0
-                  nextPhase := WRITE
-                } otherwise {
-                  registerBytesLeft := registerBytesLeft - 1
-                  nextPhase := REGISTER
-                }
+                currentPointer := rxByte
+                nextPhase := WRITE
                 ack.issued := True
                 ack.enable := True
                 ack.data := False
@@ -227,8 +212,6 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
     nextPhase := ADDRESS
     txAwaitMasterAck := False
     txByteLoaded := False
-    stagedPointer := 0
-    registerBytesLeft := 0
 
     bitCounter.reset()
   }
