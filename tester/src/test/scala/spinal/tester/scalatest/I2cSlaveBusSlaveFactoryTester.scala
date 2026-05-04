@@ -27,9 +27,9 @@ object I2cSlaveBusSlaveFactoryTester {
     busCtrl.phase.simPublic()
     busCtrl.ack.pending.simPublic()
     busCtrl.ack.issued.simPublic()
-    busCtrl.txByteLoaded.simPublic()
-    busCtrl.txAwaitMasterAck.simPublic()
-    busCtrl.rxByte.simPublic()
+    busCtrl.tx.loaded.simPublic()
+    busCtrl.tx.waitMasterAck.simPublic()
+    busCtrl.rx.data.simPublic()
 
     i2cCtrl.io.config.samplingClockDivider := 3
     i2cCtrl.io.config.timeout := 25 * 20 - 1
@@ -99,9 +99,9 @@ object I2cSlaveBusSlaveFactoryTester {
     busCtrl.phase.simPublic()
     busCtrl.ack.pending.simPublic()
     busCtrl.ack.issued.simPublic()
-    busCtrl.txByteLoaded.simPublic()
-    busCtrl.txAwaitMasterAck.simPublic()
-    busCtrl.rxByte.simPublic()
+    busCtrl.tx.loaded.simPublic()
+    busCtrl.tx.waitMasterAck.simPublic()
+    busCtrl.rx.data.simPublic()
 
     val reg8 = busCtrl.createReadAndWrite(UInt(8 bits), 0x00)
     reg8.init(0x12)
@@ -171,8 +171,8 @@ class I2cSlaveBusSlaveFactorySimTester extends SpinalSimFunSuite {
 
       def busState = {
         s"phase=${dut.busCtrl.phase.toBigInt} ack.pending=${dut.busCtrl.ack.pending.toBoolean} " +
-          s"ack.issued=${dut.busCtrl.ack.issued.toBoolean} txLoaded=${dut.busCtrl.txByteLoaded.toBoolean} " +
-          s"txAwaitAck=${dut.busCtrl.txAwaitMasterAck.toBoolean} rxByte=0x${dut.busCtrl.rxByte.toBigInt.toString(16)}"
+          s"ack.issued=${dut.busCtrl.ack.issued.toBoolean} txLoaded=${dut.busCtrl.tx.loaded.toBoolean} " +
+          s"tx.waitMasterAck=${dut.busCtrl.tx.waitMasterAck.toBoolean} rx.data=0x${dut.busCtrl.rx.data.toBigInt.toString(16)}"
       }
 
       def idleCycle(): Unit = {

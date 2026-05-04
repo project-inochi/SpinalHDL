@@ -29,7 +29,16 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
 
   val phase = Reg(I2cSlaveBusSlaveFactoryPhase()) init(ADDRESS)
   val currentAddress = Reg(UInt(8 bits)) init(0)
-  val loaded = Reg(B(0, 8 bit))
+
+  val rx = new Area {
+    val data = Reg(B(0, 8 bit))
+  }
+
+  val tx = new Area {
+    val data = RegInit(B(0, 8 bit))
+    val loaded = RegInit(False)
+    val waitMasterAck = RegInit(False)
+  }
 
   val bitCounter = new Area {
     val value = Reg(U(7, 3 bit))
@@ -38,7 +47,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
     def reset() = value := 7
 
     def count() = {
-      loaded(value) := bus.cmd.data
+      rx.data(value) := bus.cmd.data
       when(last) {
         reset()
       } otherwise {
@@ -46,8 +55,6 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
       }
     }
   }
-
-  val rxByte = loaded
 
   val ack = new Area {
     val pending = RegInit(False)
@@ -58,10 +65,6 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
 
   val nextPhase = Reg(I2cSlaveBusSlaveFactoryPhase()) init(ADDRESS)
 
-  val txByte = Reg(B(0, 8 bits))
-  val txByteLoaded = RegInit(False)
-  val txAwaitMasterAck = RegInit(False)
-
   val askWriteCmd = False
   val askReadCmd = False
   val doWriteCmd = False
@@ -70,7 +73,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
 
   val writeDataCmd = Bits(8 bits)
   val readDataCmd = Bits(8 bits)
-  writeDataCmd := rxByte
+  writeDataCmd := rx.data
   readDataCmd := 0
 
   override def busDataWidth: Int = 8
@@ -88,8 +91,8 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
   bus.rsp.enable := False
   bus.rsp.data := True
 
-  val addressMatched = rxByte(7 downto 1) === slaveAddressBits
-  val addressRead = rxByte(0)
+  val addressMatched = rx.data(7 downto 1) === slaveAddressBits
+  val addressRead = rx.data(0)
   val nackOnUnmapped = if (cfg.nackOnUnmapped) !hitAny else False
   val frameStart = bus.cmd.kind === I2cSlaveCmdMode.START || bus.cmd.kind === I2cSlaveCmdMode.RESTART
   val frameStop = bus.cmd.kind === I2cSlaveCmdMode.STOP || bus.cmd.kind === I2cSlaveCmdMode.DROP
@@ -97,18 +100,18 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
   when(bus.cmd.kind === I2cSlaveCmdMode.DRIVE) {
     switch(phase) {
       is(READ) {
-        when(txAwaitMasterAck) {
+        when(tx.waitMasterAck) {
           bus.rsp.valid := True
           bus.rsp.enable := False
           bus.rsp.data := True
-        } elsewhen (!txByteLoaded) {
+        } elsewhen (!tx.loaded) {
           askReadCmd := True
-          txByte := readDataCmd
-          txByteLoaded := True
+          tx.data := readDataCmd
+          tx.loaded := True
         } otherwise {
           bus.rsp.valid := True
           bus.rsp.enable := True
-          bus.rsp.data := txByte(bitCounter.value)
+          bus.rsp.data := tx.data(bitCounter.value)
         }
       }
       is(WAIT_STOP) {
@@ -130,8 +133,8 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
                 askReadCmd := !addressMatched && addressRead
 
                 when (isRead && !nackOnUnmapped) {
-                  txByte := readDataCmd
-                  txByteLoaded := True
+                  tx.data := readDataCmd
+                  tx.loaded := True
                 }
 
                 when(!addressMatched) {
@@ -143,7 +146,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
                 }
               }
               is(REGISTER) {
-                currentAddress := rxByte.asUInt
+                currentAddress := rx.data.asUInt
                 nextPhase := WRITE
                 ack.issued := True
                 ack.enable := True
@@ -184,8 +187,8 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
     ack.enable := False
     ack.data := True
     nextPhase := ADDRESS
-    txAwaitMasterAck := False
-    txByteLoaded := False
+    tx.waitMasterAck := False
+    tx.loaded := False
 
     bitCounter.reset()
   }
@@ -193,10 +196,10 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
   when (bus.cmd.kind === I2cSlaveCmdMode.READ) {
     switch(phase) {
       is(READ) {
-        when(txAwaitMasterAck) {
+        when(tx.waitMasterAck) {
           doReadCmd := True
-          txAwaitMasterAck := False
-          txByteLoaded := False
+          tx.waitMasterAck := False
+          tx.loaded := False
           bitCounter.reset()
 
           if (cfg.autoIncrement) {
@@ -207,9 +210,9 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
             phase := WAIT_STOP
           }
         } otherwise {
-          when(txByteLoaded) {
+          when(tx.loaded) {
             bitCounter.count()
-            txAwaitMasterAck.setWhen(bitCounter.last)
+            tx.waitMasterAck.setWhen(bitCounter.last)
           }
         }
       }
