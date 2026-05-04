@@ -34,7 +34,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
   private val nackOnUnmappedWriteEnabled = cfg.nackOnUnmappedWrite
 
   val phase = Reg(I2cSlaveBusSlaveFactoryPhase()) init(ADDRESS)
-  val currentPointer = Reg(UInt(registerAddressWidth bits)) init(0)
+  val currentAddress = Reg(UInt(registerAddressWidth bits)) init(0)
   val stagedPointer = Reg(UInt(registerAddressWidth bits)) init(0)
 
   val bitCounter = new Area {
@@ -83,8 +83,8 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
   override def busDataWidth: Int = 8
   override def wordAddressInc: Int = 1
 
-  override def readAddress(): UInt = currentPointer
-  override def writeAddress(): UInt = currentPointer
+  override def readAddress(): UInt = currentAddress
+  override def writeAddress(): UInt = currentAddress
   override def readFire(): Bool = doReadCmd
   override def writeFire(): Bool = doWriteCmd
 
@@ -159,7 +159,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
                 }
               }
               is(REGISTER) {
-                currentPointer := rxByte.asUInt
+                currentAddress := rxByte.asUInt
                 nextPhase := WRITE
                 ack.issued := True
                 ack.enable := True
@@ -178,7 +178,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
                 when(!nackOnUnmappedWrite) {
                   doWriteCmd := True
                   if (autoIncrementEnabled) {
-                    currentPointer := currentPointer + 1
+                    currentAddress := currentAddress + 1
                   }
                 }
               }
@@ -219,7 +219,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
           bitCounter.reset()
 
           if (autoIncrementEnabled) {
-            currentPointer := currentPointer + 1
+            currentAddress := currentAddress + 1
           }
 
           when(bus.cmd.data) {
@@ -268,7 +268,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
       )
     }
 
-    switch(currentPointer) {
+    switch(currentAddress) {
       for ((address, jobs) <- elementsPerAddress if address.isInstanceOf[SingleMapping]) {
         is(address.asInstanceOf[SingleMapping].address) {
           doMappedElements(jobs)
@@ -277,7 +277,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
     }
 
     for ((address, jobs) <- elementsPerAddress if !address.isInstanceOf[SingleMapping]) {
-      when(address.hit(currentPointer)) {
+      when(address.hit(currentAddress)) {
         doMappedElements(jobs)
       }
     }
