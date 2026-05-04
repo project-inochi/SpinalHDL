@@ -29,10 +29,10 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
 
   val phase = Reg(I2cSlaveBusSlaveFactoryPhase()) init(ADDRESS)
   val currentAddress = Reg(UInt(8 bits)) init(0)
+  val loaded = Reg(B(0, 8 bit))
 
   val bitCounter = new Area {
     val value = Reg(U(0, 3 bit))
-    val loaded = Reg(B(0, 8 bit))
     def last = value.andR
 
     def reset() = value := 0
@@ -47,7 +47,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
     }
   }
 
-  val rxByte = bitCounter.loaded.reversed
+  val rxByte = loaded.reversed
 
   val ack = new Area {
     val pending = RegInit(False)
@@ -154,11 +154,8 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
                 ack.issued := True
                 ack.enable := !nackOnUnmapped
                 ack.data := False
-                when(nackOnUnmapped) {
-                  nextPhase := WAIT_STOP
-                } otherwise {
-                  nextPhase := WRITE
-                }
+                nextPhase := Mux(nackOnUnmapped, WAIT_STOP, WRITE)
+
                 when(!nackOnUnmapped) {
                   doWriteCmd := True
                   if (cfg.autoIncrement) {
