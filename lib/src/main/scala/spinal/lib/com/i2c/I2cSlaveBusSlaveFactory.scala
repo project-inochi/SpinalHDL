@@ -7,8 +7,7 @@ import spinal.lib.bus.misc._
 case class I2cSlaveBusSlaveFactoryConfig(
     slaveAddress: Int,
     autoIncrement: Boolean = true,
-    nackOnUnmappedRead: Boolean = false,
-    nackOnUnmappedWrite: Boolean = false
+    nackOnUnmapped: Boolean = false
 )
 
 object I2cSlaveBusSlaveFactory {
@@ -91,8 +90,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
 
   val addressMatched = rxByte(7 downto 1) === slaveAddressBits
   val addressRead = rxByte(0)
-  val nackOnUnmappedWrite = if (cfg.nackOnUnmappedWrite) !hitAny else False
-  val nackOnUnmappedRead = if (cfg.nackOnUnmappedRead) !hitAny else False
+  val nackOnUnmapped = if (cfg.nackOnUnmapped) !hitAny else False
   val frameStart = bus.cmd.kind === I2cSlaveCmdMode.START || bus.cmd.kind === I2cSlaveCmdMode.RESTART
   val frameStop = bus.cmd.kind === I2cSlaveCmdMode.STOP || bus.cmd.kind === I2cSlaveCmdMode.DROP
 
@@ -123,7 +121,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
           when(!ack.issued) {
             switch(phase) {
               is(ADDRESS) {
-                val response = !addressMatched || (addressRead && nackOnUnmappedRead)
+                val response = !addressMatched || (addressRead && nackOnUnmapped)
                 ack.issued := True
                 ack.enable := !response
                 ack.data   := response
@@ -131,7 +129,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
                 val isRead = !addressMatched && addressRead
                 askReadCmd := !addressMatched && addressRead
 
-                when (isRead && !nackOnUnmappedRead) {
+                when (isRead && !nackOnUnmapped) {
                   txByte := readDataCmd
                   txByteLoaded := True
                 }
@@ -139,7 +137,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
                 when(!addressMatched) {
                   nextPhase := WAIT_STOP
                 } elsewhen (addressRead) {
-                  nextPhase := Mux(nackOnUnmappedRead, WAIT_STOP, READ)
+                  nextPhase := Mux(nackOnUnmapped, WAIT_STOP, READ)
                 } otherwise {
                   nextPhase := REGISTER
                 }
@@ -154,14 +152,14 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
               is(WRITE) {
                 askWriteCmd := True
                 ack.issued := True
-                ack.enable := !nackOnUnmappedWrite
+                ack.enable := !nackOnUnmapped
                 ack.data := False
-                when(nackOnUnmappedWrite) {
+                when(nackOnUnmapped) {
                   nextPhase := WAIT_STOP
                 } otherwise {
                   nextPhase := WRITE
                 }
-                when(!nackOnUnmappedWrite) {
+                when(!nackOnUnmapped) {
                   doWriteCmd := True
                   if (cfg.autoIncrement) {
                     currentAddress := currentAddress + 1
