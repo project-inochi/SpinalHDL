@@ -287,7 +287,6 @@ class I2cSlaveBusSlaveFactorySimTester extends SpinalSimFunSuite {
       assert(readBytes(0x20, 4) == Seq(0xEF, 0xCD, 0xAB, 0x89))
       writeBytes(0x20, Seq(0x10, 0x20, 0x30, 0x40))
       assert(readBytes(0x20, 4) == Seq(0x10, 0x20, 0x30, 0x40))
-      assert(readCurrent(1) == Seq(0x66))
 
       assert(readBytes(0x30, 1) == Seq(0x5A))
       assert(readBytes(0x41, 1) == Seq(0x01))

@@ -7,7 +7,6 @@ import spinal.lib.bus.misc._
 case class I2cSlaveBusSlaveFactoryConfig(
     slaveAddress: Int,
     autoIncrement: Boolean = true,
-    retainAddressPointerOnStop: Boolean = true,
     nackOnUnmappedRead: Boolean = false,
     nackOnUnmappedWrite: Boolean = false
 )
@@ -214,11 +213,6 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
     txByteLoaded := False
 
     bitCounter.reset()
-  }
-
-
-  if (!cfg.retainAddressPointerOnStop) when (frameStop) {
-    currentPointer := 0
   }
 
   when (bus.cmd.kind === I2cSlaveCmdMode.READ) {
