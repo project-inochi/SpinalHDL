@@ -225,52 +225,50 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
     currentPointer := 0
   }
 
-  switch(bus.cmd.kind) {
-    is(I2cSlaveCmdMode.READ) {
-      switch(phase) {
-        is(READ) {
-          when(txAwaitMasterAck) {
-            doReadCmd := True
-            if (autoIncrementEnabled) {
-              currentPointer := pointerIncremented(currentPointer)
-            }
-            txAwaitMasterAck := False
-            txByteLoaded := False
-            rxBitCounter := 0
-            when(bus.cmd.data) {
-              phase := WAIT_STOP
-            }
-          } otherwise {
-            when(txByteLoaded) {
-              when(rxBitCounter === 7) {
-                txAwaitMasterAck := True
-                rxBitCounter := 0
-              } otherwise {
-                rxBitCounter := rxBitCounter + 1
-              }
-            }
+  when (bus.cmd.kind === I2cSlaveCmdMode.READ) {
+    switch(phase) {
+      is(READ) {
+        when(txAwaitMasterAck) {
+          doReadCmd := True
+          if (autoIncrementEnabled) {
+            currentPointer := pointerIncremented(currentPointer)
           }
-        }
-        is(WAIT_STOP) {
-        }
-        default {
-          when(ackPending) {
-            when(ackIssued) {
-              ackPending := False
-              ackIssued := False
-              rxBitCounter := 0
-              phase := nextPhase
-            }
-          } otherwise {
-            rxShift := receivedByte
+          txAwaitMasterAck := False
+          txByteLoaded := False
+          rxBitCounter := 0
+          when(bus.cmd.data) {
+            phase := WAIT_STOP
+          }
+        } otherwise {
+          when(txByteLoaded) {
             when(rxBitCounter === 7) {
-              rxByte := receivedByte
-              ackPending := True
-              ackIssued := False
+              txAwaitMasterAck := True
               rxBitCounter := 0
             } otherwise {
               rxBitCounter := rxBitCounter + 1
             }
+          }
+        }
+      }
+      is(WAIT_STOP) {
+      }
+      default {
+        when(ackPending) {
+          when(ackIssued) {
+            ackPending := False
+            ackIssued := False
+            rxBitCounter := 0
+            phase := nextPhase
+          }
+        } otherwise {
+          rxShift := receivedByte
+          when(rxBitCounter === 7) {
+            rxByte := receivedByte
+            ackPending := True
+            ackIssued := False
+            rxBitCounter := 0
+          } otherwise {
+            rxBitCounter := rxBitCounter + 1
           }
         }
       }
