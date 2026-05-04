@@ -6,7 +6,6 @@ import spinal.lib.bus.misc._
 
 case class I2cSlaveBusSlaveFactoryConfig(
     slaveAddress: Int,
-    registerAddressWidth: Int = 8,
     autoIncrement: Boolean = true,
     retainAddressPointerOnStop: Boolean = true,
     nackOnUnmappedRead: Boolean = false,
@@ -27,7 +26,8 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
   import I2cSlaveBusSlaveFactoryPhase._
 
   require(cfg.slaveAddress >= 0 && cfg.slaveAddress < 128, s"Invalid 7-bit I2C slave address ${cfg.slaveAddress}")
-  require(cfg.registerAddressWidth >= 8 && cfg.registerAddressWidth % 8 == 0, "registerAddressWidth must be a multiple of 8 bits")
+
+  val registerAddressWidth = 8
 
   private val slaveAddressBits = B(cfg.slaveAddress, 7 bits)
   private val autoIncrementEnabled = cfg.autoIncrement
@@ -35,8 +35,8 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
   private val nackOnUnmappedWriteEnabled = cfg.nackOnUnmappedWrite
 
   val phase = Reg(I2cSlaveBusSlaveFactoryPhase()) init(ADDRESS)
-  val currentPointer = Reg(UInt(cfg.registerAddressWidth bits)) init(0)
-  val stagedPointer = Reg(UInt(cfg.registerAddressWidth bits)) init(0)
+  val currentPointer = Reg(UInt(registerAddressWidth bits)) init(0)
+  val stagedPointer = Reg(UInt(registerAddressWidth bits)) init(0)
 
   val bitCounter = new Area {
     val value = Reg(U(0, 3 bit))
@@ -166,7 +166,7 @@ class I2cSlaveBusSlaveFactory(bus: I2cSlaveBus, cfg: I2cSlaveBusSlaveFactoryConf
                 }
               }
               is(REGISTER) {
-                currentPointer := rxByte
+                currentPointer := rxByte.asUInt
                 nextPhase := WRITE
                 ack.issued := True
                 ack.enable := True

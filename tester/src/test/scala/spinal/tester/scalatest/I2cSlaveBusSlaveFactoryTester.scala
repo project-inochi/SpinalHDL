@@ -7,7 +7,7 @@ import spinal.lib.bus.misc.SingleMapping
 import spinal.lib.com.i2c._
 
 object I2cSlaveBusSlaveFactoryTester {
-  class Dut(registerAddressWidth: Int = 8) extends Component {
+  class Dut() extends Component {
     val io = new Bundle {
       val i2c = master(I2c())
     }
@@ -22,10 +22,7 @@ object I2cSlaveBusSlaveFactoryTester {
 
     val busCtrl = I2cSlaveBusSlaveFactory(
       i2cCtrl.io.bus,
-      I2cSlaveBusSlaveFactoryConfig(
-        slaveAddress = 0x42,
-        registerAddressWidth = registerAddressWidth
-      )
+      I2cSlaveBusSlaveFactoryConfig(slaveAddress = 0x42)
     )
     busCtrl.phase.simPublic()
     busCtrl.ack.pending.simPublic()
@@ -89,17 +86,14 @@ object I2cSlaveBusSlaveFactoryTester {
     busCtrl.read(delayed, 0x50)
   }
 
-  class BusDut(registerAddressWidth: Int = 8) extends Component {
+  class BusDut() extends Component {
     val io = new Bundle {
       val bus = slave(I2cSlaveBus())
     }
 
     val busCtrl = I2cSlaveBusSlaveFactory(
       io.bus,
-      I2cSlaveBusSlaveFactoryConfig(
-        slaveAddress = 0x42,
-        registerAddressWidth = registerAddressWidth
-      )
+      I2cSlaveBusSlaveFactoryConfig(slaveAddress = 0x42)
     )
 
     busCtrl.phase.simPublic()
@@ -163,7 +157,7 @@ class I2cSlaveBusSlaveFactoryTester extends SpinalTesterCocotbBase {
 
 class I2cSlaveBusSlaveFactoryElaborationTester extends SpinalAnyFunSuite {
   test("register_address_width_16") {
-    SpinalConfig().generateVerilog(new I2cSlaveBusSlaveFactoryTester.Dut(registerAddressWidth = 16))
+    SpinalConfig().generateVerilog(new I2cSlaveBusSlaveFactoryTester.Dut())
   }
 }
 
