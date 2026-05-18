@@ -108,6 +108,11 @@ class HubFiber() extends Area {
       // equivalent to probeSpec.map(_.where.mapping.hit(addr)).orR
     }
     val hub = new Hub(parameter)
+    val flush = parameter.withFlushBus generate FlushBus(parameter.flushBusParam)
+    if(parameter.withFlushBus) {
+      hub.io.flush.cmd << flush.cmd
+      flush.rsp << hub.io.flush.rsp
+    }
     hub.io.up << up.bus
     hub.io.down >> down.bus
   }

@@ -119,10 +119,15 @@ class CacheFiber(withCtrl : Boolean = false) extends Area{
     }
     val cache = new Cache(parameter)
     // TODO probeRegion
+    val flush = parameter.withFlushBus generate FlushBus(parameter.flushBusParam)
 
     if (withCtrl) {
       cache.io.ctrl << ctrl.bus
       interrupt.flag := cache.io.interrupt
+    }
+    if (parameter.withFlushBus) {
+      cache.io.flush.cmd << flush.cmd
+      flush.rsp << cache.io.flush.rsp
     }
     cache.io.up << up.bus
     cache.io.down >> down.bus
