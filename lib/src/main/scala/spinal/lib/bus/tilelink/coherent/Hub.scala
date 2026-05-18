@@ -366,54 +366,62 @@ class Hub(p : HubParameters) extends Component{
   val probe = new Area{
     val isl = frontendA.stages.last
     val push = Stream(ProbeCmd())
-    val pushA = Stream(ProbeCmd())
+    val pushBuffer = mutable.ArrayBuffer[ProbeCmd]()
     val pushCmd = isl(frontendA.spawn.CMD)
     val isAcquire = Opcode.A.isAcquire(pushCmd.opcode)
-    pushA.valid := isl.isValid && !isl.internals.request.halts.orR
-    isl.haltIt(!pushA.ready)
-    pushA.ctx.opcode     := pushCmd.opcode
-    pushA.ctx.address    := pushCmd.address
-    pushA.ctx.fromFlush  := False
-    pushA.ctx.toTrunk    := pushCmd.param =/= Param.Grow.NtoB
-    pushA.ctx.debugId    := pushCmd.debugId
-    if(ubp.withDataA) pushA.ctx.bufferId := isl(frontendA.BUFFER_ID)
-    pushA.ctx.conflictCtx := isl(CONFLICT_CTX)
-    pushA.ctx.size       := pushCmd.size
-    pushA.ctx.source     := pushCmd.source
-    pushA.fromNone := pushCmd.param =/= Param.Grow.BtoT && isAcquire
-    pushA.selfMask   := B(coherentMasters.map(_.sourceHit(pushCmd.source))).andMask(isAcquire)
-    pushA.mask := ~pushA.selfMask
-    when(!pushA.fromNone){
-      pushA.mask.setAll()
-    }
-    val isProbeRegion = p.probeRegion(pushCmd.address)
-    when(!isProbeRegion){
-      pushA.mask.clearAll()
+
+    val fromFrontend = new Area {
+      val push = Stream(ProbeCmd())
+
+      push.valid := isl.isValid && !isl.internals.request.halts.orR
+      isl.haltIt(!push.ready)
+      push.ctx.opcode     := pushCmd.opcode
+      push.ctx.address    := pushCmd.address
+      push.ctx.fromFlush  := False
+      push.ctx.toTrunk    := pushCmd.param =/= Param.Grow.NtoB
+      push.ctx.debugId    := pushCmd.debugId
+      if(ubp.withDataA) push.ctx.bufferId := isl(frontendA.BUFFER_ID)
+      push.ctx.conflictCtx := isl(CONFLICT_CTX)
+      push.ctx.size       := pushCmd.size
+      push.ctx.source     := pushCmd.source
+      push.fromNone := pushCmd.param =/= Param.Grow.BtoT && isAcquire
+      push.selfMask   := B(coherentMasters.map(_.sourceHit(pushCmd.source))).andMask(isAcquire)
+      push.mask := ~push.selfMask
+      when(!push.fromNone){
+        push.mask.setAll()
+      }
+      val isProbeRegion = p.probeRegion(pushCmd.address)
+      when(!isProbeRegion){
+        push.mask.clearAll()
+      }
+
+      pushBuffer += push
     }
 
     val fromFlushBus = p.withFlushBus generate new Area {
-      val pushF = Stream(ProbeCmd())
-      pushF.arbitrationFrom(io.flush.cmd)
-      pushF.ctx.opcode := Opcode.A.PUT_FULL_DATA
-      pushF.ctx.address := io.flush.cmd.address(blockRange) @@ U(0, blockRange.low bits)
-      pushF.ctx.fromFlush := True
-      pushF.ctx.toTrunk := True
-      pushF.ctx.source := io.flush.cmd.source.resized
-      pushF.ctx.debugId := DebugId()
-      if(ubp.withDataA) pushF.ctx.bufferId := 0
-      pushF.ctx.conflictCtx := False
-      pushF.ctx.size := log2Up(p.blockSize)
-      pushF.fromNone := False
-      pushF.selfMask := 0
-      pushF.mask.setAll()
-      when(!p.probeRegion(pushF.ctx.address)){
-        pushF.mask.clearAll()
+      val push = Stream(ProbeCmd())
+
+      push.arbitrationFrom(io.flush.cmd)
+      push.ctx.opcode := Opcode.A.PUT_FULL_DATA
+      push.ctx.address := io.flush.cmd.address(blockRange) @@ U(0, blockRange.low bits)
+      push.ctx.fromFlush := True
+      push.ctx.toTrunk := True
+      push.ctx.source := io.flush.cmd.source.resized
+      push.ctx.debugId := DebugId()
+      if(ubp.withDataA) push.ctx.bufferId := 0
+      push.ctx.conflictCtx := False
+      push.ctx.size := log2Up(p.blockSize)
+      push.fromNone := False
+      push.selfMask := 0
+      push.mask.setAll()
+      when(!p.probeRegion(push.ctx.address)){
+        push.mask.clearAll()
       }
 
       assert(p.flushBusParam.sourceWidth <= ubp.sourceWidth)
-      push << StreamArbiterFactory().lowerFirst.noLock.onArgs(pushA, pushF)
+      pushBuffer += push
     }
-    if(!p.withFlushBus) push << pushA
+    push << StreamArbiterFactory().lowerFirst.noLock.buildOn(pushBuffer)
 
 
     val slots = for(i <- 0 until probeCount) yield new Area{
