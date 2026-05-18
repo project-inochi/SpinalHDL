@@ -222,11 +222,23 @@ class Hub(p : HubParameters) extends Component{
       write.address := initializer.counter.resized
       write.data := False
     }
-    val target = new MemArea
+    val target = new MemArea {
+      val upA = Stream(write.payload)
+      val flush = p.withFlushBus generate Stream(write.payload)
+      val inputs = ArrayBuffer(upA)
+      if(p.withFlushBus) inputs += flush
+      val arbiter = StreamArbiterFactory().noLock.lowerFirst.onArgs(inputs: _*).toFlow
+      when(initializer.done) {
+        write << arbiter
+      }
+    }
     val hit = new MemArea {
       val upE = Stream(write.payload)
       val downD = Stream(write.payload)
-      val arbiter = StreamArbiterFactory().noLock.lowerFirst.onArgs(upE, downD).toFlow
+      val flush = p.withFlushBus generate Stream(write.payload)
+      val inputs = ArrayBuffer(upE, downD)
+      if(p.withFlushBus) inputs += flush
+      val arbiter = StreamArbiterFactory().noLock.lowerFirst.onArgs(inputs: _*).toFlow
       when(initializer.done) {
         write << arbiter
       }
@@ -313,11 +325,10 @@ class Hub(p : HubParameters) extends Component{
       val hazard = hit =/= target
       haltIt(hazard)
 
-      when(initializer.done) {
-        setsBusy.target.write.valid := isFiring
-        setsBusy.target.write.address := spawn.CMD.address(setsRange)
-        setsBusy.target.write.data := !target
-      }
+      setsBusy.target.upA.valid := isValid && initializer.done && !internals.request.halts.orR
+      setsBusy.target.upA.address := spawn.CMD.address(setsRange)
+      setsBusy.target.upA.data := !target
+      haltIt(!setsBusy.target.upA.ready)
 
       CONFLICT_CTX := !target
     }
@@ -366,7 +377,7 @@ class Hub(p : HubParameters) extends Component{
   val probe = new Area{
     val isl = frontendA.stages.last
     val push = Stream(ProbeCmd())
-    val pushBuffer = mutable.ArrayBuffer[ProbeCmd]()
+    val pushBuffer = ArrayBuffer[Stream[ProbeCmd]]()
     val pushCmd = isl(frontendA.spawn.CMD)
     val isAcquire = Opcode.A.isAcquire(pushCmd.opcode)
 
@@ -398,37 +409,13 @@ class Hub(p : HubParameters) extends Component{
       pushBuffer += push
     }
 
-    val fromFlushBus = p.withFlushBus generate new Area {
-      val push = Stream(ProbeCmd())
-
-      push.arbitrationFrom(io.flush.cmd)
-      push.ctx.opcode := Opcode.A.PUT_FULL_DATA
-      push.ctx.address := io.flush.cmd.address(blockRange) @@ U(0, blockRange.low bits)
-      push.ctx.fromFlush := True
-      push.ctx.toTrunk := True
-      push.ctx.source := io.flush.cmd.source.resized
-      push.ctx.debugId := DebugId()
-      if(ubp.withDataA) push.ctx.bufferId := 0
-      push.ctx.conflictCtx := False
-      push.ctx.size := log2Up(p.blockSize)
-      push.fromNone := False
-      push.selfMask := 0
-      push.mask.setAll()
-      when(!p.probeRegion(push.ctx.address)){
-        push.mask.clearAll()
-      }
-
-      assert(p.flushBusParam.sourceWidth <= ubp.sourceWidth)
-      pushBuffer += push
-    }
-    push << StreamArbiterFactory().lowerFirst.noLock.buildOn(pushBuffer)
-
-
     val slots = for(i <- 0 until probeCount) yield new Area{
       val fire = False
       val valid = RegInit(False) clearWhen(fire)
+      val address = Reg(UInt(blockRange.size bits))
       val set = Reg(UInt(setsRange.size bits))
       val pending = Reg(UInt(log2Up(coherentMasterCount+1) bits))
+      val pendingSources = Reg(Bits(coherentMasterCount bits))
       val fromNone = Reg(Bool())
       val unique = Reg(Bool())
       val probeAckDataCompleted = Reg(Bool())
@@ -438,6 +425,82 @@ class Hub(p : HubParameters) extends Component{
 
     val ctxMem = Mem.fill(probeCount)(new ProbeCtx())
     val ctxWrite = ctxMem.writePort()
+
+    val fromFlushBus = p.withFlushBus generate new Pipeline {
+      val stages = newChained(2, Connection.M2S())
+      val push = Stream(ProbeCmd())
+
+      val spawn = new Area {
+        val stage = stages(0)
+        import stage._
+
+        driveFrom(io.flush.cmd)
+        ADDRESS := io.flush.cmd.address(blockRange) @@ U(0, blockRange.low bits)
+        SOURCE := io.flush.cmd.source.resized
+        haltWhen(!initializer.done)
+      }
+
+      val readConflicts = new Area{
+        val stage = stages(0)
+        import stage._
+
+        val readAddress = spawn.stage(ADDRESS)(setsRange)
+        val JUST_BUSY = insert(setsBusy.target.write.valid && setsBusy.target.write.address === readAddress)
+        val JUST_FREE = insert(setsBusy.hit.write.valid && setsBusy.hit.write.address === readAddress)
+      }
+
+      val checkConflicts = new Area{
+        val stage = stages(1)
+        import stage._
+        import readConflicts._
+
+        val hitPort = setsBusy.hit.mem.readSyncPort()
+        hitPort.cmd.valid := !stage.isStuck
+        hitPort.cmd.payload := readAddress
+        hitPort.writeFirstAndUpdate(setsBusy.hit.write)
+
+        val targetPort = setsBusy.target.mem.readSyncPort()
+        targetPort.cmd.valid := !stage.isStuck
+        targetPort.cmd.payload := readAddress
+        targetPort.writeFirstAndUpdate(setsBusy.target.write)
+
+        val hit    = hitPort.rsp
+        val target = targetPort.rsp
+        val hazard = hit =/= target
+        val sameBlockBusy = slots.map(s => s.valid && s.address === stage(ADDRESS)(blockRange)).orR
+        haltIt(hazard || sameBlockBusy)
+
+        setsBusy.target.flush.valid := isValid && initializer.done && !internals.request.halts.orR
+        setsBusy.target.flush.address := stage(ADDRESS)(setsRange)
+        setsBusy.target.flush.data := !target
+        haltIt(!setsBusy.target.flush.ready)
+
+        CONFLICT_CTX := !target
+
+        push.valid := isValid && !internals.request.halts.orR
+        haltIt(!push.ready)
+        push.ctx.opcode := Opcode.A.PUT_FULL_DATA
+        push.ctx.address := stage(ADDRESS)
+        push.ctx.fromFlush := True
+        push.ctx.toTrunk := True
+        push.ctx.source := stage(SOURCE)
+        push.ctx.debugId := DebugId()
+        if(ubp.withDataA) push.ctx.bufferId := 0
+        push.ctx.conflictCtx := stage(CONFLICT_CTX)
+        push.ctx.size := log2Up(p.blockSize)
+        push.fromNone := False
+        push.selfMask := 0
+        push.mask.setAll()
+        when(!p.probeRegion(push.ctx.address)){
+          push.mask.clearAll()
+        }
+      }
+
+      assert(p.flushBusParam.sourceWidth <= ubp.sourceWidth)
+      pushBuffer += push
+    }
+    val pushArbiter = StreamArbiterFactory().lowerFirst.noLock.buildOn(pushBuffer)
+    push << pushArbiter.io.output
 
     val cmd = new Area{
       val slotted = RegInit(False)
@@ -453,8 +516,10 @@ class Hub(p : HubParameters) extends Component{
       when(push.valid && !slotted && !full){
         slots.onMask(freeMask){s =>
           s.valid := True
+          s.address := push.ctx.address(blockRange)
           s.set := push.ctx.address(setsRange)
           s.pending := pending
+          s.pendingSources := push.mask
           s.fromNone := push.fromNone
           s.unique := True
           s.probeAckDataCompleted := False
@@ -492,27 +557,35 @@ class Hub(p : HubParameters) extends Component{
     }
 
     val rsp = new Area{
-      val bypass = Flow(UInt(log2Up(probeCount) bits))
+      case class Bypass() extends Bundle{
+        val id = UInt(log2Up(probeCount) bits)
+        val masterOh = Bits(coherentMasterCount bits)
+      }
+      val bypass = Flow(Bypass())
       val input = io.up.c.haltWhen(bypass.valid)
       val ack = input.fire && input.opcode === Opcode.C.PROBE_ACK
-      val hitOh = slots.map(s => s.valid && s.set === input.address(setsRange))
+      val isProbeRsp = input.opcode === Opcode.C.PROBE_ACK || input.opcode === Opcode.C.PROBE_ACK_DATA
+      val inputMasterOh = coherentMasterToSource.map(input.source === _).asBits
+      val hitOh = slots.map(s => s.valid && s.address === input.address(blockRange) && (!isProbeRsp || (s.pendingSources & inputMasterOh).orR))
       val hitId = OHToUInt(hitOh)
       val pending = slots.map(_.pending).read(hitId)
       val selfId = slots.map(_.selfId).read(hitId)
       val pendingNext = pending - 1
-      val masterOh = coherentMasterToSource.map(input.source === _).asBits
+      val masterOh = CombInit(inputMasterOh)
       val masterId = OHToUInt(masterOh)
       val isSelf = selfId === masterId
       val lostIt = isSelf && input.param === Param.Report.NtoN
 
       when(bypass.valid){
-        hitId := bypass.payload
+        hitId := bypass.id
+        masterOh := bypass.masterOh
         lostIt := False
       }
 
       when(ack || bypass.valid) {
         slots.onSel(hitId) { s =>
           s.pending := pendingNext
+          s.pendingSources := s.pendingSources & ~masterOh
           s.fromNone setWhen (lostIt)
         }
       }
@@ -602,11 +675,14 @@ class Hub(p : HubParameters) extends Component{
         io.probeOrdering.bytes := (U(1) << toUpD.size).resized
 
         if(p.withFlushBus) {
-          toFlushRsp.valid := isValid && hitFlush
+          setsBusy.hit.flush.valid := isValid && hitFlush && toFlushRsp.ready
+          setsBusy.hit.flush.address := CTX.address(setsRange)
+          setsBusy.hit.flush.data := CTX.conflictCtx
+          toFlushRsp.valid := isValid && hitFlush && setsBusy.hit.flush.ready
           toFlushRsp.source := CTX.source.resized
         }
 
-        haltWhen(hitUpD ? !toUpD.ready | hitFlush.mux(if(p.withFlushBus) !toFlushRsp.ready else False, !toBackend.ready))
+        haltWhen(hitUpD ? !toUpD.ready | hitFlush.mux(if(p.withFlushBus) !toFlushRsp.ready || !setsBusy.hit.flush.ready else False, !toBackend.ready))
       }
     }
   }
@@ -817,7 +893,8 @@ class Hub(p : HubParameters) extends Component{
       val hit = ctx.fromC && ctx.c.isProbeData
       val fired = RegInit(False) setWhen(probe.rsp.bypass.fire) clearWhen(isReady)
       probe.rsp.bypass.valid := valid && hit && ! fired
-      probe.rsp.bypass.payload := ctx.c.probeId
+      probe.rsp.bypass.id := ctx.c.probeId
+      probe.rsp.bypass.masterOh := coherentMasterToSource.map(ctx.c.source === _).asBits
     }
 
     val toUp = new Area{
@@ -868,6 +945,7 @@ class Hub(p : HubParameters) extends Component{
   }
 
   frontendA.build()
+  if(p.withFlushBus) probe.fromFlushBus.build()
   probe.wake.build()
   backend.build()
   downD.build()
