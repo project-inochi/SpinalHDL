@@ -7,24 +7,27 @@ import spinal.lib.fsm._
 case class ImsicFileInfo(
   hartId        : Int,
   guestId       : Int,
-  sourceIds     : Seq[Int],
+  sourceNum     : Int,
   groupId       : Int,
   groupHartId   : Int
-)
+) {
+  require(isPow2(sourceNum))
+  def sourceIds = 1 until sourceNum
+}
 
 object ImsicFileInfo {
-  def apply(hartId: Int, guestId: Int, sourceIds: Seq[Int]): ImsicFileInfo = ImsicFileInfo(
+  @deprecated("ImsicFileInfo only record the number of interrupts")
+  def apply(hartId: Int, guestId: Int, sourceIds: Seq[Int]): ImsicFileInfo = apply(hartId, 0, sourceIds.size)
+
+  @deprecated("ImsicFileInfo only record the number of interrupts")
+  def apply(hartId: Int, sourceIds: Seq[Int]): ImsicFileInfo = apply(hartId, 0, sourceIds)
+
+  def apply(hartId: Int, sourceNum: Int): ImsicFileInfo = apply(hartId, 0, sourceNum)
+
+  def apply(hartId: Int, guestId: Int, sourceNum: Int): ImsicFileInfo = ImsicFileInfo(
     hartId = hartId,
     guestId = guestId,
-    sourceIds = sourceIds,
-    groupId = 0,
-    groupHartId = hartId
-  )
-
-  def apply(hartId: Int, sourceIds: Seq[Int]): ImsicFileInfo = ImsicFileInfo(
-    hartId = hartId,
-    guestId = 0,
-    sourceIds = sourceIds,
+    sourceNum = sourceNum,
     groupId = 0,
     groupHartId = hartId
   )
@@ -74,7 +77,7 @@ case class ImsicFile(hartId: Int, guestId: Int, sourceNum: Int) extends Area {
   def asImsicFileInfo(hartPerGroup: Int = 0): ImsicFileInfo = ImsicFileInfo(
     hartId      = hartId,
     guestId     = guestId,
-    sourceIds   = sourceIds,
+    sourceNum   = sourceNum,
     groupId     = if (hartPerGroup == 0) 0 else (hartId / hartPerGroup),
     groupHartId = if (hartPerGroup == 0) hartId else (hartId % hartPerGroup)
   )
@@ -288,7 +291,7 @@ case class ImsicFileRam(p: ImsicFileParameters) extends Area {
   def asImsicFileInfo(hartPerGroup: Int = 0): ImsicFileInfo = ImsicFileInfo(
     hartId      = hartId,
     guestId     = guestId,
-    sourceIds   = 1 until sourceNum,
+    sourceNum   = sourceNum,
     groupId     = if (hartPerGroup == 0) 0 else (hartId / hartPerGroup),
     groupHartId = if (hartPerGroup == 0) hartId else (hartId % hartPerGroup)
   )
