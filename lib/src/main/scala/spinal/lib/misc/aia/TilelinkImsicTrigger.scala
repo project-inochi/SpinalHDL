@@ -34,16 +34,28 @@ case class TilelinkImsicTrigger(infos: Seq[ImsicFileInfo],
 )
 
 object TilelinkImsicTrigger {
-  def getTilelinkSupport(transfers: tilelink.M2sTransfers, addressWidth: Int = 20) = bus.tilelink.SlaveFactory.getSupported(
+  def getTilelinkSupport(addressWidth: Int = 20) = bus.tilelink.SlaveFactory.getSupported(
     addressWidth = addressWidth,
     dataWidth = 32,
     allowBurst = false,
     proposed = tilelink.M2sSupport(
       addressWidth = addressWidth,
       dataWidth = 32,
-      transfers = transfers
+      transfers = tilelink.M2sTransfers(
+        putFull = tilelink.SizeRange(4)
+      )
     )
   )
+
+  def getTilelinkSupport(mapping: ImsicMapping, infos: Seq[ImsicFileInfo]): tilelink.M2sSupport = getTilelinkSupport(addressWidth(mapping, infos))
+
+  @deprecated("TilelinkImsicTrigger always set its own transfers and ignore custom transfers")
+  def getTilelinkSupport(transfers: tilelink.M2sTransfers, addressWidth: Int): tilelink.M2sSupport = getTilelinkSupport(addressWidth)
+
+  @deprecated("TilelinkImsicTrigger always set its own transfers and ignore custom transfers")
+  def getTilelinkSupport(transfers: tilelink.M2sTransfers): tilelink.M2sSupport = getTilelinkSupport(20)
+
+  @deprecated("TilelinkImsicTrigger always set its own transfers and ignore custom transfers")
   def getTilelinkSupport(transfers: tilelink.M2sTransfers, mapping: ImsicMapping, infos: Seq[ImsicFileInfo]): tilelink.M2sSupport = getTilelinkSupport(transfers, addressWidth(mapping, infos))
 
   def addressWidth(mapping: ImsicMapping, infos: Seq[ImsicFileInfo]): Int = {
@@ -79,7 +91,10 @@ case class TilelinkCoreImsicTrigger(infos: Seq[ImsicFileInfo],
 )
 
 object TilelinkCoreImsicTrigger {
+  @deprecated("TilelinkCoreImsicTrigger always set its own transfers and ignore custom transfers")
   def getTilelinkSupport(transfers: tilelink.M2sTransfers, infos: Seq[ImsicFileInfo]) = TilelinkImsicTrigger.getTilelinkSupport(transfers, addressWidth(infos))
+
+  def getTilelinkSupport(infos: Seq[ImsicFileInfo]) = TilelinkImsicTrigger.getTilelinkSupport(addressWidth(infos))
 
   def addressWidth(infos: Seq[ImsicFileInfo]): Int = {
     val guestIdWidth = log2Up(infos.map(_.guestId).max + 1)
@@ -106,7 +121,7 @@ case class TilelinkCoreImsicTriggerFiber() extends Area {
 
     val infos = sources.map(_.info).toSeq
 
-    node.m2s.supported.load(TilelinkCoreImsicTrigger.getTilelinkSupport(node.m2s.proposed.transfers, infos))
+    node.m2s.supported.load(TilelinkCoreImsicTrigger.getTilelinkSupport(infos))
     node.s2m.none()
 
     val core = TilelinkCoreImsicTrigger(infos, node.bus.p)
