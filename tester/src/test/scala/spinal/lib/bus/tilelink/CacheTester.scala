@@ -254,25 +254,9 @@ class CacheTester extends AnyFunSuite{
       if(flushParam != null) initFlushBus(tb.dut.flush)
       val m0 = tb.mastersStuff(0).agent
 
-      def doFlush(sourceId : Int, address : Int, needInterrupt: Boolean): Unit = {
-        val size = 0x40
+      def doFlushWithCtrl(sourceId : Int, address : Int, needInterrupt: Boolean): Unit = doFlush(ctrl, sourceId, address, 0x40, if (needInterrupt) tb.dut.ctrlInterrupt else null)
 
-        while(ctrl.getInt(sourceId, 0x08) != 0){ } // Reserve the flush hardware
-        ctrl.putInt(sourceId, 0x10, address);
-        ctrl.putInt(sourceId, 0x18, address + size - 1);
-        ctrl.putInt(sourceId, 0x08, 3 | (sourceId << 8)); // Start the flush with completion ID = sourceId
-        if(needInterrupt){
-          ctrl.putInt(sourceId, 0x38, 1); //enable the flush idle interrupt
-          ctrl.cd.waitSamplingWhere(tb.dut.ctrlInterrupt.toBoolean) // Wait for the interrupt
-          ctrl.putInt(sourceId, 0x38, 0);
-        } else {
-          while ((ctrl.getInt(sourceId, 0x00) & (1 << sourceId)) == 0) { // Wait until the sourceId completion register is high
-            ctrl.cd.waitSampling(simRandom.nextInt(50))
-          }
-        }
-      }
-
-      flushCheck(tb, m0, doFlush)
+      flushCheck(tb, m0, doFlushWithCtrl)
     }
 
     if(flushParam != null) tester.doSim("flushBus") { tb =>
@@ -280,7 +264,7 @@ class CacheTester extends AnyFunSuite{
       val flush = tb.dut.flush
       val m0 = tb.mastersStuff(0).agent
 
-      def doFlush(sourceId : Int, address : Int, needInterrupt: Boolean): Unit = {
+      def doFlushWithBus(sourceId : Int, address : Int, needInterrupt: Boolean): Unit = {
         flush.cmd.valid #= true
         flush.cmd.address #= address
         flush.cmd.source #= sourceId
@@ -290,7 +274,7 @@ class CacheTester extends AnyFunSuite{
         m0.cd.waitSampling()
       }
 
-      flushCheck(tb, m0, doFlush)
+      flushCheck(tb, m0, doFlushWithBus)
 
       tb.waitCheckers()
     }
