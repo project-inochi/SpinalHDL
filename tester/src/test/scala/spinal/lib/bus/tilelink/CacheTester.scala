@@ -7,10 +7,11 @@ import tilelink._
 import tilelink.fabric.sim._
 import org.scalatest.funsuite.AnyFunSuite
 import spinal.core.Component
+import spinal.lib.slave
 import spinal.lib.bus.misc.SizeMapping
-import spinal.lib.bus.tilelink.coherent.{CacheFiber, CacheParam, SelfFLush}
+import spinal.lib.bus.tilelink.coherent.{CacheFiber, CacheParam, FlushBus, FlushParam, SelfFLush}
 import spinal.lib.bus.tilelink.fabric.{MasterBus, SlaveBus}
-import spinal.lib.bus.tilelink.sim.{Block, MasterAgent, MasterTester}
+import spinal.lib.bus.tilelink.sim.{Block, MasterAgent, MasterDebugTester, MasterDebugTesterElement, MasterTester}
 import spinal.lib.system.tag.PMA
 import spinal.sim.SimThread
 
@@ -18,8 +19,7 @@ import scala.collection.mutable.ArrayBuffer
 
 class CacheTester extends AnyFunSuite{
 
-
-  def doTest(cp : CacheParam => Unit): Unit = {
+  def doTest(cp : CacheParam => Unit, flushParam : FlushParam = null): Unit = {
     val tester = new TilelinkTester(
       simConfig = SimConfig,
       cGen = new Component {
@@ -72,6 +72,12 @@ class CacheTester extends AnyFunSuite{
         directory.up << m0.node
         directory.ctrl at (0x00, 0x100) of ctrl.node
 
+        val flush = directory.withFlushBus generate slave(FlushBus(directory.parameter.flushBusParam))
+        if(directory.withFlushBus) {
+          directory.flush.cmd << flush.cmd
+          flush.rsp << directory.flush.rsp
+        }
+
         val ctrlInterrupt = out Bool()
         ctrlInterrupt := directory.interrupt.flag
 
@@ -117,8 +123,67 @@ class CacheTester extends AnyFunSuite{
       }
     }
 
+    def initFlushBus(flush : FlushBus): Unit = {
+      flush.cmd.valid #= false
+      flush.cmd.address #= 0
+      flush.cmd.source #= 0
+      flush.rsp.ready #= true
+    }
+
+    def doDirected(name : String)(body : MasterDebugTester => Unit): Unit = {
+      tester.doSim(name) { tb =>
+        if(flushParam != null) initFlushBus(tb.dut.flush)
+        val directed = new MasterDebugTester(
+          (tb.masterSpecs, tb.mastersStuff).zipped.map((s, t) => new MasterDebugTesterElement(s, t.agent))
+        )
+        body(directed)
+      }
+    }
+
+    def flushCheck[T <: Component](tb: TilelinkTestbenchBase[T], m0: MasterAgent, doFlush: (Int, Int, Boolean) => Unit) = {
+      for(address <- List(0x10000, 0x10040)) {
+        val offset = address - 0x10000
+        var block : Block = null
+
+        // Dirty
+        m0.putInt(0, address, 0x1)
+        assert(tb.slavesStuff(0).model.mem.readInt(offset) != 0x1)
+        doFlush(0, address, false)
+        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+
+        // Clean
+        m0.getInt(0, address)
+        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+        doFlush(0, address, false)
+        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+
+        // Clean probe
+        block = m0.acquireBlock(0, Param.Grow.NtoT, address, 0x40)
+        doFlush(0, address, true)
+        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+
+        // Clean probe2
+        block = m0.acquireBlock(0, Param.Grow.NtoT, address, 0x40)
+        m0.release(0, Param.Cap.toB, block)
+        doFlush(0, address, true)
+        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+
+        // Dirty probe
+        block = m0.acquireBlock(0, Param.Grow.NtoT, address, 0x40)
+        block.data(0) = 0x02
+        block.dirty = true
+        doFlush(0, address, true)
+        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x2)
+
+
+        assert(m0.getInt(0, address) == 0x2)
+      }
+    }
+
     tester.doSim("manual") { tb =>
 //      disableSimWave()
+
+      if(flushParam != null) initFlushBus(tb.dut.flush)
 
       periodicaly(10000) {
         tb.mastersStuff.foreach(_.agent.driver.driver.randomizeStallRate())
@@ -186,6 +251,7 @@ class CacheTester extends AnyFunSuite{
 
     tester.doSim("flush") { tb =>
       val ctrl = new MasterAgent(tb.dut.ctrl.node.bus, tb.dut.ctrl.node.clockDomain)(tb.idAllocator)
+      if(flushParam != null) initFlushBus(tb.dut.flush)
       val m0 = tb.mastersStuff(0).agent
       for(address <- List(0x10000, 0x10040)) {
         val offset = address - 0x10000
@@ -226,18 +292,67 @@ class CacheTester extends AnyFunSuite{
       }
     }
 
-    tester.doSimDirected("get"){_.coverGet(32)}
-    tester.doSimDirected("putFull") {_.coverPutFullData(32)}
-    tester.doSimDirected("putPartial") {_.coverPutPartialData(32)}
-    tester.doSimDirected("acquireB")(_.coverAcquireB(32))
-    tester.doSimDirected("acquireT")(_.coverAcquireT(32))
-    tester.doSimDirected("acquireBT")(_.coverAcquireBT(32))
-    tester.doSimDirected("acquireTB")(_.coverAcquireTB(32))
-    tester.doSimDirected("acquirePerm")(_.coverAcquirePerm(32))
-    tester.doSimDirected("coherencyBx2")(_.coverCoherencyBx2(32))
-    tester.doSimDirected("coherencyTx2")(_.coverCoherencyTx2(32))
-    tester.doSimDirected("coherencyT_B")(_.coverCoherencyT_B(32))
-    tester.doSimDirected("coherencyBx2_T_Bx2")(_.coverCoherencyBx2_T_Bx2(32))
+    if(flushParam != null) tester.doSim("flushBus") { tb =>
+      initFlushBus(tb.dut.flush)
+      val flush = tb.dut.flush
+      val m0 = tb.mastersStuff(0).agent
+
+      def doFlush(sourceId : Int, address : Int): Unit = {
+        flush.cmd.valid #= true
+        flush.cmd.address #= address
+        flush.cmd.source #= sourceId
+        m0.cd.waitSamplingWhere(flush.cmd.ready.toBoolean)
+        flush.cmd.valid #= false
+        m0.cd.waitSamplingWhere(flush.rsp.valid.toBoolean && flush.rsp.source.toBigInt == sourceId)
+        m0.cd.waitSampling()
+      }
+
+      for(address <- List(0x10000, 0x10040)) {
+        val offset = address - 0x10000
+        var block : Block = null
+
+        // Dirty local line
+        m0.putInt(0, address, 0x1)
+        assert(tb.slavesStuff(0).model.mem.readInt(offset) != 0x1)
+        doFlush(0, address)
+        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+
+        // Clean line
+        m0.getInt(0, address)
+        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+        doFlush(1, address)
+        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+
+        // Clean probed line
+        block = m0.acquireBlock(0, Param.Grow.NtoT, address, 0x40)
+        doFlush(2, address)
+        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+
+        // Dirty probed line
+        block = m0.acquireBlock(0, Param.Grow.NtoT, address, 0x40)
+        block.data(0) = 0x02
+        block.dirty = true
+        doFlush(3, address)
+        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x2)
+
+        assert(m0.getInt(0, address) == 0x2)
+      }
+
+      tb.waitCheckers()
+    }
+
+    doDirected("get"){_.coverGet(32)}
+    doDirected("putFull") {_.coverPutFullData(32)}
+    doDirected("putPartial") {_.coverPutPartialData(32)}
+    doDirected("acquireB")(_.coverAcquireB(32))
+    doDirected("acquireT")(_.coverAcquireT(32))
+    doDirected("acquireBT")(_.coverAcquireBT(32))
+    doDirected("acquireTB")(_.coverAcquireTB(32))
+    doDirected("acquirePerm")(_.coverAcquirePerm(32))
+    doDirected("coherencyBx2")(_.coverCoherencyBx2(32))
+    doDirected("coherencyTx2")(_.coverCoherencyTx2(32))
+    doDirected("coherencyT_B")(_.coverCoherencyT_B(32))
+    doDirected("coherencyBx2_T_Bx2")(_.coverCoherencyBx2_T_Bx2(32))
 
 
 
@@ -261,5 +376,8 @@ class CacheTester extends AnyFunSuite{
   }
   test("sp 4bank"){
     doTest{p => p.withDualPortRam = false; p.cacheBanks = 4}
+  }
+  test("dp flush bus"){
+    doTest({p => }, FlushParam(32, 2))
   }
 }
