@@ -62,7 +62,7 @@ class CacheTester extends AnyFunSuite{
         )
         ctrl.node.addTag(tilelinkTesterExcluded)
 
-        val directory = new CacheFiber(withCtrl = true)
+        val directory = new CacheFiber(withCtrl = true, flushBusParam = flushParam)
         directory.parameter.cacheWays = 4
         directory.parameter.cacheBytes = 4096
         directory.parameter.allocateOnMiss = (op, src, addr, size, param) => addr(6)
