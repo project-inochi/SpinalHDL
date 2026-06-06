@@ -297,25 +297,22 @@ class CacheTester extends AnyFunSuite{
     tester.checkErrors()
   }
 
-  test("dp 1bank"){
-    doTest{p => }
-  }
-  test("dp 1bank non-pow2"){
-    doTest{p => p.generalSlotCount = 9}
-  }
-  test("dp 2bank"){
-    doTest{p => p.cacheBanks = 2}
-  }
-  test("sp 1bank"){
-    doTest{p => p.withDualPortRam = false}
-  }
-  test("sp 2bank"){
-    doTest{p => p.withDualPortRam = false; p.cacheBanks = 2}
-  }
-  test("sp 4bank"){
-    doTest{p => p.withDualPortRam = false; p.cacheBanks = 4}
-  }
-  test("dp flush bus"){
-    doTest({p => }, FlushParam(32, 2))
+  val cps = ArrayBuffer[(String, CacheParam => Unit)](
+    "dp 1bank"          -> {p => },
+    "dp 1bank non-pow2" -> {p => p.generalSlotCount = 9},
+    "dp 2bank"          -> {p => p.cacheBanks = 2},
+    "sp 1bank"          -> {p => p.withDualPortRam = false},
+    "sp 2bank"          -> {p => p.withDualPortRam = false; p.cacheBanks = 2},
+    "sp 4bank"          -> {p => p.withDualPortRam = false; p.cacheBanks = 4}
+  )
+
+  for ((name, cp) <- cps) {
+    test(name) {
+      doTest(cp, null)
+    }
+
+    test(name + " flush") {
+      doTest(cp, FlushParam(32, 2))
+    }
   }
 }
