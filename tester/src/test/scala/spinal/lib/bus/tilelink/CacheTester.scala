@@ -253,43 +253,26 @@ class CacheTester extends AnyFunSuite{
       val ctrl = new MasterAgent(tb.dut.ctrl.node.bus, tb.dut.ctrl.node.clockDomain)(tb.idAllocator)
       if(flushParam != null) initFlushBus(tb.dut.flush)
       val m0 = tb.mastersStuff(0).agent
-      for(address <- List(0x10000, 0x10040)) {
-        val offset = address - 0x10000
-        var block : Block = null
 
-        // Dirty
-        m0.putInt(0, address, 0x1)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) != 0x1)
-        doFlush(ctrl, 0, address, 0x40)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+      def doFlush(sourceId : Int, address : Int, needInterrupt: Boolean): Unit = {
+        val size = 0x40
 
-        // Clean
-        m0.getInt(0, address)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
-        doFlush(ctrl, 0, address, 0x40)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
-
-        // Clean probe
-        block = m0.acquireBlock(0, Param.Grow.NtoT, address, 0x40)
-        doFlush(ctrl, 0, address, 0x40, tb.dut.ctrlInterrupt)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
-
-        // Clean probe2
-        block = m0.acquireBlock(0, Param.Grow.NtoT, address, 0x40)
-        m0.release(0, Param.Cap.toB, block)
-        doFlush(ctrl, 0, address, 0x40, tb.dut.ctrlInterrupt)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
-
-        // Dirty probe
-        block = m0.acquireBlock(0, Param.Grow.NtoT, address, 0x40)
-        block.data(0) = 0x02
-        block.dirty = true
-        doFlush(ctrl, 0, address, 0x40, tb.dut.ctrlInterrupt)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x2)
-
-
-        assert(m0.getInt(0, address) == 0x2)
+        while(ctrl.getInt(sourceId, 0x08) != 0){ } // Reserve the flush hardware
+        ctrl.putInt(sourceId, 0x10, address);
+        ctrl.putInt(sourceId, 0x18, address + size - 1);
+        ctrl.putInt(sourceId, 0x08, 3 | (sourceId << 8)); // Start the flush with completion ID = sourceId
+        if(needInterrupt){
+          ctrl.putInt(sourceId, 0x38, 1); //enable the flush idle interrupt
+          ctrl.cd.waitSamplingWhere(tb.dut.ctrlInterrupt.toBoolean) // Wait for the interrupt
+          ctrl.putInt(sourceId, 0x38, 0);
+        } else {
+          while ((ctrl.getInt(sourceId, 0x00) & (1 << sourceId)) == 0) { // Wait until the sourceId completion register is high
+            ctrl.cd.waitSampling(simRandom.nextInt(50))
+          }
+        }
       }
+
+      flushCheck(tb, m0, doFlush)
     }
 
     if(flushParam != null) tester.doSim("flushBus") { tb =>
@@ -297,7 +280,7 @@ class CacheTester extends AnyFunSuite{
       val flush = tb.dut.flush
       val m0 = tb.mastersStuff(0).agent
 
-      def doFlush(sourceId : Int, address : Int): Unit = {
+      def doFlush(sourceId : Int, address : Int, needInterrupt: Boolean): Unit = {
         flush.cmd.valid #= true
         flush.cmd.address #= address
         flush.cmd.source #= sourceId
@@ -307,36 +290,7 @@ class CacheTester extends AnyFunSuite{
         m0.cd.waitSampling()
       }
 
-      for(address <- List(0x10000, 0x10040)) {
-        val offset = address - 0x10000
-        var block : Block = null
-
-        // Dirty local line
-        m0.putInt(0, address, 0x1)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) != 0x1)
-        doFlush(0, address)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
-
-        // Clean line
-        m0.getInt(0, address)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
-        doFlush(1, address)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
-
-        // Clean probed line
-        block = m0.acquireBlock(0, Param.Grow.NtoT, address, 0x40)
-        doFlush(2, address)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
-
-        // Dirty probed line
-        block = m0.acquireBlock(0, Param.Grow.NtoT, address, 0x40)
-        block.data(0) = 0x02
-        block.dirty = true
-        doFlush(3, address)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x2)
-
-        assert(m0.getInt(0, address) == 0x2)
-      }
+      flushCheck(tb, m0, doFlush)
 
       tb.waitCheckers()
     }
