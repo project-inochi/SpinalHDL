@@ -50,6 +50,7 @@ case class HubParameters(var unp : NodeParameters,
                          var blockSize : Int,
                          var probeCount : Int = 8,
                          var aBufferCount: Int = 4,
+                         var flushBusParam : FlushParam = null,
                          var probeRegion : UInt => Bool) {
   def cacheSize = sets*wayCount*blockSize
   def addressWidth = unp.m.addressWidth
@@ -64,6 +65,7 @@ case class HubParameters(var unp : NodeParameters,
   def blockRange = addressWidth-1 downto log2Up(lineSize)
   def lineSize = blockSize
   def setsRange = lineRange
+  def withFlushBus = flushBusParam != null
 }
 
 case class OrderingCmd(bytesMax : Int) extends Bundle{
@@ -159,6 +161,7 @@ class Hub(p : HubParameters) extends Component{
     val down = master(Bus(dbp))
     val backendOrdering = master(Flow(OrderingCmd(up.p.sizeBytes)))
     val probeOrdering = master(Flow(OrderingCmd(up.p.sizeBytes)))
+    val flush = withFlushBus generate slave(FlushBus(p.flushBusParam))
   }
 
   this.addTag(OrderingTag(io.backendOrdering))
@@ -204,6 +207,7 @@ class Hub(p : HubParameters) extends Component{
     val debugId  = DebugId()
     val bufferId = ubp.withDataA generate UInt(log2Up(aBufferCount) bits)
     val conflictCtx = CONFLICT_CTX()
+    val isFlush = Bool()
   }
   class ProbeCtxFull extends ProbeCtx{
     val probeId = UInt(log2Up(probeCount) bits)
@@ -261,7 +265,9 @@ class Hub(p : HubParameters) extends Component{
     }
     val target = new MemArea {
       val frontendA = Stream(write.payload)
+      val frontendFlush = withFlushBus generate Stream(write.payload)
       val writeCmds = ArrayBuffer(frontendA)
+      if (withFlushBus) writeCmds += frontendFlush
       val arbiter = StreamArbiterFactory().noLock.lowerFirst.buildOn(writeCmds).io.output.toFlow
       when(initializer.done) {
         write << arbiter
@@ -270,7 +276,9 @@ class Hub(p : HubParameters) extends Component{
     val hit = new MemArea {
       val upE = Stream(write.payload)
       val downD = Stream(write.payload)
+      val frontendFlush = withFlushBus generate Stream(write.payload)
       val writeCmds = ArrayBuffer(upE, downD)
+      if (withFlushBus) writeCmds += frontendFlush
       val arbiter = StreamArbiterFactory().noLock.lowerFirst.buildOn(writeCmds).io.output.toFlow
       when(initializer.done) {
         write << arbiter
@@ -351,29 +359,29 @@ class Hub(p : HubParameters) extends Component{
       val hazard = hit =/= target
       haltWhen(hazard)
 
-      setsBusy.target.frontendA.valid := up.isFiring
+      val issue = forkStream(enabled = !hazard)
+      setsBusy.target.frontendA.valid := issue.valid
       setsBusy.target.frontendA.address := spawn.CMD.address(setsRange)
       setsBusy.target.frontendA.data := !target
-      haltWhen(!setsBusy.target.frontendA.ready)
 
       CONFLICT_CTX := !target
     }
 
     val probe = new Area{
-      val isl = last
       val cmd = Stream(ProbeCmd())
-      val pushCmd = isl(spawn.CMD)
+      val pushCmd = checkConflicts(spawn.CMD)
       val isAcquire = Opcode.A.isAcquire(pushCmd.opcode)
-      cmd.valid := isl.isValid && !isl.requests.halts.orR
-      isl.haltWhen(!cmd.ready)
+      cmd.valid := checkConflicts.issue.valid
+      checkConflicts.issue.ready := cmd.ready && setsBusy.target.frontendA.ready
       cmd.ctx.opcode      := pushCmd.opcode
       cmd.ctx.address     := pushCmd.address
       cmd.ctx.toTrunk     := pushCmd.param =/= Param.Grow.NtoB
       cmd.ctx.debugId     := pushCmd.debugId
-      if(ubp.withDataA) cmd.ctx.bufferId := isl(BUFFER_ID)
-      cmd.ctx.conflictCtx := isl(CONFLICT_CTX)
+      if(ubp.withDataA) cmd.ctx.bufferId := checkConflicts(BUFFER_ID)
+      cmd.ctx.conflictCtx := checkConflicts(CONFLICT_CTX)
       cmd.ctx.size        := pushCmd.size
       cmd.ctx.source      := pushCmd.source
+      cmd.ctx.isFlush     := False
       cmd.fromNone        := pushCmd.param =/= Param.Grow.BtoT && isAcquire
       cmd.selfMask        := B(coherentMasters.map(_.sourceHit(pushCmd.source))).andMask(isAcquire)
       cmd.mask := ~cmd.selfMask
@@ -387,8 +395,68 @@ class Hub(p : HubParameters) extends Component{
     }
   }
 
+  val frontendFlush = withFlushBus generate new StageCtrlPipeline {
+    assert(p.flushBusParam.sourceWidth <= p.unp.m.sourceWidth)
+
+    val spawnNode = ctrl(0)
+    val spawn = new spawnNode.Area {
+      up.arbitrateFrom(io.flush.cmd)
+      haltWhen(!initializer.done)
+
+      ADDRESS := (io.flush.cmd.address(blockRange) @@ U(0, blockRange.low bits)).resized
+      SOURCE := io.flush.cmd.source.resized
+    }
+
+    val checkNode = ctrl(1)
+    val checkConflicts = new checkNode.Area {
+      val hitPort = setsBusy.hit.mem.readSyncPort()
+      hitPort.cmd.valid := !up.isValid || up.isMoving
+      hitPort.cmd.payload := ADDRESS(setsRange)
+      hitPort.writeFirstAndUpdate(setsBusy.hit.write)
+
+      val targetPort = setsBusy.target.mem.readSyncPort()
+      targetPort.cmd.valid := !up.isValid || up.isMoving
+      targetPort.cmd.payload := ADDRESS(setsRange)
+      targetPort.writeFirstAndUpdate(setsBusy.target.write)
+
+      val hit    = hitPort.rsp
+      val target = targetPort.rsp
+      val hazard = hit =/= target
+      haltWhen(hazard)
+
+      val issue = forkStream(enabled = !hazard)
+      setsBusy.target.frontendFlush.valid := issue.valid
+      setsBusy.target.frontendFlush.address := ADDRESS(setsRange)
+      setsBusy.target.frontendFlush.data := !target
+
+      CONFLICT_CTX := !target
+    }
+
+    val probe = new Area {
+      val cmd = Stream(ProbeCmd())
+      cmd.valid := checkConflicts.issue.valid
+      checkConflicts.issue.ready := cmd.ready && setsBusy.target.frontendFlush.ready
+      cmd.ctx.opcode      := Opcode.A.GET
+      cmd.ctx.address     := checkConflicts(ADDRESS)
+      cmd.ctx.toTrunk     := False
+      cmd.ctx.debugId     := 0
+      if(ubp.withDataA) cmd.ctx.bufferId := 0
+      cmd.ctx.conflictCtx := checkConflicts(CONFLICT_CTX)
+      cmd.ctx.size        := log2Up(blockSize)
+      cmd.ctx.source      := checkConflicts(SOURCE)
+      cmd.ctx.isFlush     := True
+      cmd.fromNone := False
+      cmd.selfMask.clearAll()
+      cmd.mask.setAll()
+      when(!p.probeRegion(checkConflicts(ADDRESS))){
+        cmd.mask.clearAll()
+      }
+    }
+  }
+
   val probe = new Area{
     val cmds = ArrayBuffer[Stream[ProbeCmd]](frontendA.probe.cmd)
+    if (withFlushBus) cmds += frontendFlush.probe.cmd
     val push = StreamArbiterFactory().lowerFirst.noLock.buildOn(cmds).io.output
 
     val slots = for(i <- 0 until probeCount) yield new Area{
@@ -439,7 +507,7 @@ class Hub(p : HubParameters) extends Component{
       val requests = push.mask & ~fired
       val masterOh = OHMasking.firstV2(requests)
       val selfProbe = (masterOh & halted.selfMask).orR
-      val removeBranches = isPut || isAcquire && halted.ctx.toTrunk && !selfProbe
+      val removeBranches = isPut || halted.ctx.isFlush || isAcquire && halted.ctx.toTrunk && !selfProbe
       bus.valid   := halted.valid && requests.orR
       bus.opcode  := Opcode.B.PROBE_BLOCK
       bus.param   := removeBranches ? B(Param.Cap.toN, 3 bits) | B(Param.Cap.toB, 3 bits)
@@ -539,15 +607,16 @@ class Hub(p : HubParameters) extends Component{
         CTX := ctxMem.readSync(insertion.hitId, !up.isValid || up.isMoving)
         val hitUpD = CTX.opcode === Opcode.A.ACQUIRE_PERM ||
                      CTX.opcode === Opcode.A.ACQUIRE_BLOCK && !FROM_NONE
+        val hitFlush = CTX.isFlush
 
-        toBackend.valid := isValid && !hitUpD
+        toBackend.valid := isValid && !hitUpD && !hitFlush
         toBackend.payload.assignSomeByName(CTX)
         toBackend.probeId := PROBE_ID
         when(UNIQUE){
           toBackend.toTrunk := True
         }
 
-        toUpD.valid := isValid && hitUpD
+        toUpD.valid := isValid && hitUpD && !hitFlush
         toUpD.opcode  := Opcode.D.GRANT
         toUpD.param   := 0
         toUpD.source  := CTX.source
@@ -561,7 +630,22 @@ class Hub(p : HubParameters) extends Component{
         io.probeOrdering.debugId := CTX.debugId
         io.probeOrdering.bytes := (U(1) << toUpD.size).resized
 
-        haltWhen(hitUpD ? !toUpD.ready | !toBackend.ready)
+        haltWhen(!hitFlush && (hitUpD ? !toUpD.ready | !toBackend.ready))
+
+        val flush = withFlushBus generate new Area {
+          val rsp = cloneOf(io.flush.rsp)
+          val issue = forkStream(enabled = hitFlush)
+          rsp.valid := issue.valid
+          rsp.source := CTX.source.resized
+
+          setsBusy.hit.frontendFlush.valid := issue.valid
+          setsBusy.hit.frontendFlush.address := CTX.address(setsRange)
+          setsBusy.hit.frontendFlush.data := CTX.conflictCtx
+
+          issue.ready := rsp.ready && setsBusy.hit.frontendFlush.ready
+
+          io.flush.rsp <-< rsp
+        }
       }
     }
   }
@@ -806,6 +890,7 @@ class Hub(p : HubParameters) extends Component{
   }
 
   frontendA.build()
+  if(withFlushBus) frontendFlush.build()
   probe.wake.build()
   backend.build()
   downD.build()
