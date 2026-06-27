@@ -190,6 +190,46 @@ class Hub(p : HubParameters) extends Component{
   val UNIQUE = Payload(Bool())
   val CONFLICT_CTX = Payload(Bool())
 
+
+  val coherentMasters = unp.m.masters.filter(_.emits.withBCE)
+  val coherentMasterCount = coherentMasters.size
+  val coherentMasterToSource = coherentMasters.map(_.bSourceId)
+  def MasterId() = UInt(log2Up(coherentMasterCount) bits)
+  class ProbeCtx extends Bundle{
+    val opcode  = Opcode.A()
+    val address = ubp.address()
+    val size    = ubp.size()
+    val toTrunk = Bool()
+    val source  = ubp.source()
+    val debugId  = DebugId()
+    val bufferId = ubp.withDataA generate UInt(log2Up(aBufferCount) bits)
+    val conflictCtx = CONFLICT_CTX()
+  }
+  class ProbeCtxFull extends ProbeCtx{
+    val probeId = UInt(log2Up(probeCount) bits)
+  }
+
+  case class ProbeCmd() extends Bundle {
+    val ctx = new ProbeCtx()
+    val fromNone = Bool()
+    val selfMask = Bits(coherentMasterCount bits)
+    val mask = Bits(coherentMasterCount bits)
+  }
+
+  case class CtxA() extends Bundle{
+    val source = ubp.source()
+    val set = SET_ID()
+    val getPut = Bool()
+    val toTrunk = Bool()
+    val conflictCtx = CONFLICT_CTX()
+  }
+  case class CtxC() extends Bundle{
+    val source = ubp.source()
+    val isProbeData = Bool()
+    def isReleaseData = !isProbeData
+    val probeId = PROBE_ID()
+  }
+
   val initializer = new Area{
     val initCycles = p.sets
     val counter = Reg(UInt(log2Up(initCycles) + 1 bits)) init(0)
@@ -219,11 +259,19 @@ class Hub(p : HubParameters) extends Component{
       write.address := initializer.counter.resized
       write.data := False
     }
-    val target = new MemArea
+    val target = new MemArea {
+      val frontendA = Stream(write.payload)
+      val writeCmds = ArrayBuffer(frontendA)
+      val arbiter = StreamArbiterFactory().noLock.lowerFirst.buildOn(writeCmds).io.output.toFlow
+      when(initializer.done) {
+        write << arbiter
+      }
+    }
     val hit = new MemArea {
       val upE = Stream(write.payload)
       val downD = Stream(write.payload)
-      val arbiter = StreamArbiterFactory().noLock.lowerFirst.onArgs(upE, downD).toFlow
+      val writeCmds = ArrayBuffer(upE, downD)
+      val arbiter = StreamArbiterFactory().noLock.lowerFirst.buildOn(writeCmds).io.output.toFlow
       when(initializer.done) {
         write << arbiter
       }
@@ -303,81 +351,45 @@ class Hub(p : HubParameters) extends Component{
       val hazard = hit =/= target
       haltWhen(hazard)
 
-      when(initializer.done) {
-        setsBusy.target.write.valid := up.isFiring
-        setsBusy.target.write.address := spawn.CMD.address(setsRange)
-        setsBusy.target.write.data := !target
-      }
+      setsBusy.target.frontendA.valid := up.isFiring
+      setsBusy.target.frontendA.address := spawn.CMD.address(setsRange)
+      setsBusy.target.frontendA.data := !target
+      haltWhen(!setsBusy.target.frontendA.ready)
 
       CONFLICT_CTX := !target
     }
-  }
 
-  val coherentMasters = unp.m.masters.filter(_.emits.withBCE)
-  val coherentMasterCount = coherentMasters.size
-  val coherentMasterToSource = coherentMasters.map(_.bSourceId)
-  def MasterId() = UInt(log2Up(coherentMasterCount) bits)
-  class ProbeCtx extends Bundle{
-    val opcode  = Opcode.A()
-    val address = ubp.address()
-    val size    = ubp.size()
-    val toTrunk = Bool()
-    val source  = ubp.source()
-    val debugId  = DebugId()
-    val bufferId = ubp.withDataA generate UInt(log2Up(aBufferCount) bits)
-    val conflictCtx = CONFLICT_CTX()
-  }
-  class ProbeCtxFull extends ProbeCtx{
-    val probeId = UInt(log2Up(probeCount) bits)
-  }
-
-  case class ProbeCmd() extends Bundle {
-    val ctx = new ProbeCtx()
-    val fromNone = Bool()
-    val selfMask = Bits(coherentMasterCount bits)
-    val mask = Bits(coherentMasterCount bits)
-  }
-
-  case class CtxA() extends Bundle{
-    val source = ubp.source()
-    val set = SET_ID()
-    val getPut = Bool()
-    val toTrunk = Bool()
-    val conflictCtx = CONFLICT_CTX()
-  }
-  case class CtxC() extends Bundle{
-    val source = ubp.source()
-    val isProbeData = Bool()
-    def isReleaseData = !isProbeData
-    val probeId = PROBE_ID()
+    val probe = new Area{
+      val isl = last
+      val cmd = Stream(ProbeCmd())
+      val pushCmd = isl(spawn.CMD)
+      val isAcquire = Opcode.A.isAcquire(pushCmd.opcode)
+      cmd.valid := isl.isValid && !isl.requests.halts.orR
+      isl.haltWhen(!cmd.ready)
+      cmd.ctx.opcode      := pushCmd.opcode
+      cmd.ctx.address     := pushCmd.address
+      cmd.ctx.toTrunk     := pushCmd.param =/= Param.Grow.NtoB
+      cmd.ctx.debugId     := pushCmd.debugId
+      if(ubp.withDataA) cmd.ctx.bufferId := isl(BUFFER_ID)
+      cmd.ctx.conflictCtx := isl(CONFLICT_CTX)
+      cmd.ctx.size        := pushCmd.size
+      cmd.ctx.source      := pushCmd.source
+      cmd.fromNone        := pushCmd.param =/= Param.Grow.BtoT && isAcquire
+      cmd.selfMask        := B(coherentMasters.map(_.sourceHit(pushCmd.source))).andMask(isAcquire)
+      cmd.mask := ~cmd.selfMask
+      when(!cmd.fromNone){
+        cmd.mask.setAll()
+      }
+      val isProbeRegion = p.probeRegion(pushCmd.address)
+      when(!isProbeRegion){
+        cmd.mask.clearAll()
+      }
+    }
   }
 
   val probe = new Area{
-    val isl = frontendA.last
-    val push = Stream(ProbeCmd())
-    val pushCmd = isl(frontendA.spawn.CMD)
-    val isAcquire = Opcode.A.isAcquire(pushCmd.opcode)
-    push.valid := isl.isValid && !isl.requests.halts.orR
-    isl.haltWhen(!push.ready)
-    push.ctx.opcode     := pushCmd.opcode
-    push.ctx.address    := pushCmd.address
-    push.ctx.toTrunk    := pushCmd.param =/= Param.Grow.NtoB
-    push.ctx.debugId    := pushCmd.debugId
-    if(ubp.withDataA) push.ctx.bufferId := isl(frontendA.BUFFER_ID)
-    push.ctx.conflictCtx := isl(CONFLICT_CTX)
-    push.ctx.size       := pushCmd.size
-    push.ctx.source     := pushCmd.source
-    push.fromNone := pushCmd.param =/= Param.Grow.BtoT && isAcquire
-    push.selfMask   := B(coherentMasters.map(_.sourceHit(pushCmd.source))).andMask(isAcquire)
-    push.mask := ~push.selfMask
-    when(!push.fromNone){
-      push.mask.setAll()
-    }
-    val isProbeRegion = p.probeRegion(pushCmd.address)
-    when(!isProbeRegion){
-      push.mask.clearAll()
-    }
-
+    val cmds = ArrayBuffer[Stream[ProbeCmd]](frontendA.probe.cmd)
+    val push = StreamArbiterFactory().lowerFirst.noLock.buildOn(cmds).io.output
 
     val slots = for(i <- 0 until probeCount) yield new Area{
       val fire = False
