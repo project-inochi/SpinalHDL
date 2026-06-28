@@ -12,9 +12,11 @@ import scala.collection.mutable.ArrayBuffer
 
 
 // TODO remove probe on IO regions
-class HubFiber() extends Area {
+class HubFiber(flushBusParam : FlushParam = null) extends Area {
   val up = Node.slave()
   val down = Node.master()
+  val withFlushBus = flushBusParam != null
+  val flush = withFlushBus generate FlushBus(flushBusParam)
 
   var parameter = HubParameters(
     unp = null, // Unknown yet
@@ -24,6 +26,7 @@ class HubFiber() extends Area {
     blockSize = -1, // Unknown yet
     probeCount = 4,
     aBufferCount = 4,
+    flushBusParam = flushBusParam,
     probeRegion = null
   )
 
@@ -108,6 +111,10 @@ class HubFiber() extends Area {
       // equivalent to probeSpec.map(_.where.mapping.hit(addr)).orR
     }
     val hub = new Hub(parameter)
+    if (withFlushBus) {
+      hub.io.flush.cmd << flush.cmd
+      hub.io.flush.rsp >> flush.rsp
+    }
     hub.io.up << up.bus
     hub.io.down >> down.bus
   }
