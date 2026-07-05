@@ -74,7 +74,7 @@ class NodesBuilder() extends Area {
   }
 }
 
-class StagePipeline(defaultKey: Any = null) extends Area {
+class StagePipelineLayer(val defaultKey: Any = null) extends Area {
   val nodes = mutable.LinkedHashMap[Int, Node]()
   val links = mutable.ArrayBuffer[StageLink]()
 
@@ -91,18 +91,24 @@ class StagePipeline(defaultKey: Any = null) extends Area {
       if(withoutCollapse) stage.withoutCollapse()
       links += stage
     }
+  }
+}
+
+class StagePipeline(defaultKey: Any = null) extends StagePipelineLayer(defaultKey) {
+  override def build(withoutCollapse : Boolean = false): Unit = {
+    super.build(withoutCollapse)
     Builder(links)
   }
 }
 
-class StageCtrlPipeline(defaultKey: Any = null) extends Area {
+class StageCtrlPipelineLayer(val defaultKey: Any = null) extends Area {
   val ctrls = mutable.LinkedHashMap[Int, CtrlLink]()
   val links = mutable.ArrayBuffer[StageLink]()
 
   /* This can be simplified if defaultKey/useSingleDefaultKey is removed */
   private def newCtrl() = {
     val c = new CtrlLink(new Node(defaultKey), new Node(defaultKey)) {
-      override def defaultKey: Any = StageCtrlPipeline.this.defaultKey
+      override def defaultKey: Any = StageCtrlPipelineLayer.this.defaultKey
       override def useSingleDefaultKey: Boolean = false
     }
     c.up.setCompositeName(c, "up")
@@ -120,7 +126,12 @@ class StageCtrlPipeline(defaultKey: Any = null) extends Area {
     for(i <- ctrls.keys.min until ctrls.keys.max){
       links += StageLink(ctrl(i).down, ctrl(i+1).up).setCompositeName(this, s"stage_${i+1}")
     }
-    Builder(links ++ ctrls.values)
   }
 }
 
+class StageCtrlPipeline(defaultKey: Any = null) extends StageCtrlPipelineLayer(defaultKey) {
+  override def build(): Unit = {
+    super.build()
+    Builder(links ++ ctrls.values)
+  }
+}
