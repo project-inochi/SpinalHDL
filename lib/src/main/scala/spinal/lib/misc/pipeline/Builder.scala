@@ -74,7 +74,16 @@ class NodesBuilder() extends Area {
   }
 }
 
-class StagePipelineLayer(val defaultKey: Any = null) extends Area {
+trait StagedLayer {
+  def defaultKey: Any
+  def connectors: Seq[Link]
+  def build(): Unit
+
+  def up: Node
+  def down: Node
+}
+
+private[pipeline] class StagePipelineLayer(val defaultKey: Any = null) extends Area with StagedLayer {
   val nodes = mutable.LinkedHashMap[Int, Node]()
   val links = mutable.ArrayBuffer[StageLink]()
 
@@ -85,23 +94,30 @@ class StagePipelineLayer(val defaultKey: Any = null) extends Area {
   def first = node(nodes.keys.min)
   def last = node(nodes.keys.max)
 
-  def build(withoutCollapse : Boolean = false): Unit = {
+  override def connectors: Seq[Link] = links
+
+  override def build(): Unit = build(false)
+
+  def build(withoutCollapse : Boolean): Unit = {
     for(i <- nodes.keys.min until nodes.keys.max){
       val stage = StageLink(node(i), node(i+1)).setCompositeName(this, s"stage_${i+1}")
       if(withoutCollapse) stage.withoutCollapse()
       links += stage
     }
   }
+
+  override def up = first
+  override def down = last
 }
 
 class StagePipeline(defaultKey: Any = null) extends StagePipelineLayer(defaultKey) {
-  override def build(withoutCollapse : Boolean = false): Unit = {
+  override def build(withoutCollapse : Boolean): Unit = {
     super.build(withoutCollapse)
     Builder(links)
   }
 }
 
-class StageCtrlPipelineLayer(val defaultKey: Any = null) extends Area {
+private[pipeline] class StageCtrlPipelineLayer(val defaultKey: Any = null) extends Area with StagedLayer {
   val ctrls = mutable.LinkedHashMap[Int, CtrlLink]()
   val links = mutable.ArrayBuffer[StageLink]()
 
@@ -122,11 +138,16 @@ class StageCtrlPipelineLayer(val defaultKey: Any = null) extends Area {
   def first = ctrl(ctrls.keys.min)
   def last = ctrl(ctrls.keys.max)
 
-  def build(): Unit = {
+  override def connectors: Seq[Link] = links ++ ctrls.values
+
+  override def build(): Unit = {
     for(i <- ctrls.keys.min until ctrls.keys.max){
       links += StageLink(ctrl(i).down, ctrl(i+1).up).setCompositeName(this, s"stage_${i+1}")
     }
   }
+
+  override def up = first.up
+  override def down = last.down
 }
 
 class StageCtrlPipeline(defaultKey: Any = null) extends StageCtrlPipelineLayer(defaultKey) {
