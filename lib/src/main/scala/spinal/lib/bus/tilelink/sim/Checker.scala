@@ -54,7 +54,7 @@ class Checker(p : BusParameter, mappings : Seq[Endpoint], checkMapping : Boolean
 
   val inflightA = Array.fill[InflightA](1 << p.sourceWidth)(null)
   val inflightB = mutable.LinkedHashMap[(Int, BigInt), TransactionB]()
-  val inflightC = mutable.LinkedHashMap[(Int, BigInt), TransactionC]()
+  val inflightC = mutable.LinkedHashMap[Int, TransactionC]()
   val inflightD = mutable.LinkedHashMap[BigInt, TransactionD]()
 
   case class Cap(var current : Int, var probed : Boolean)
@@ -161,8 +161,8 @@ class Checker(p : BusParameter, mappings : Seq[Endpoint], checkMapping : Boolean
     import Opcode.C._
     c.opcode match {
       case RELEASE_DATA | RELEASE => {
-        val key = c.source -> c.address
-        assert(!inflightC.contains(key))
+        val key = c.source
+        assert(!inflightC.contains(key), s"C source $key already has an outstanding Release :\n${inflightC(key)}$c")
         inflightC(key) = c
       }
       case PROBE_ACK | PROBE_ACK_DATA => {
@@ -222,8 +222,9 @@ class Checker(p : BusParameter, mappings : Seq[Endpoint], checkMapping : Boolean
         if(checkMapping) idCallback.remove(ctx.a.debugId, ctx)
       }
       case Opcode.D.RELEASE_ACK => {
-        inflightC.remove(d.source -> d.address) match {
-          case Some(c) => doShrink(d.source, d.address, c.param)
+        inflightC.remove(d.source) match {
+          case Some(c) => doShrink(d.source, c.address, c.param)
+          case None => SimError(s"ReleaseAck without outstanding C source ${d.source}")
         }
       }
     }
