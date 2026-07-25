@@ -199,6 +199,9 @@ class Checker(p : BusParameter, mappings : Seq[Endpoint], checkMapping : Boolean
   }
 
   override def onD(d: TransactionD) = {
+    if(d.withData) assert(!d.denied || d.corrupt, "Denied is also corrupt")
+    if(!d.withData) assert(!d.corrupt)
+
     d.opcode match{
       case Opcode.D.ACCESS_ACK | Opcode.D.ACCESS_ACK_DATA | Opcode.D.GRANT | Opcode.D.GRANT_DATA  =>  {
         val ctx = inflightA(d.source)
@@ -206,12 +209,11 @@ class Checker(p : BusParameter, mappings : Seq[Endpoint], checkMapping : Boolean
         d.assertRspOf(ctx.a)
         if(checkMapping) {
           assert(ctx.isSet, s"No reference was provided for :\n${ctx.a}to compare with :\n$d")
-          if (d.withData && !ctx.denied) {
+          if (d.withData && !ctx.denied && !d.corrupt) {
             assert(ctx.ref != null, s"No reference data was provided for :\n${ctx.a}to compare with :\n$d")
             assert((ctx.ref, d.data).zipped.forall(_ == _), s"Missmatch for :\n${ctx.a}\n$d\n!=${ctx.ref.map(v => f"${v}%02x").mkString(" ")}")
           }
           assert(d.denied == ctx.denied)
-          assert(!d.corrupt)
         }
         if(d.opcode == Opcode.D.GRANT || d.opcode == Opcode.D.GRANT_DATA){
           doGrow(d.source, d.address, d.param)
