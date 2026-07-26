@@ -120,6 +120,20 @@ class MemoryAgent(bus: Bus,
           d.denied = !ok
           driver.scheduleD(d)
         }
+        case Opcode.A.INTENT => {
+          a.param match {
+            case Param.Intent.CBO_CLEAN => handleCoherency(a, Param.Cap.toB)
+            case Param.Intent.CBO_INVAL | Param.Intent.CBO_FLUSH => handleCoherency(a, Param.Cap.toN)
+            case Param.Intent.PREFETCH_READ | Param.Intent.PREFETCH_WRITE =>
+            case _ => assert(false, s"Invalid parameter ${a.param}")
+          }
+          if(idCallback != null) idCallback.call(a.debugId)(new OrderingArgs(0, a.bytes))
+          val d = TransactionD(a)
+          d.opcode = Opcode.D.HINT_ACK
+          d.denied = !ok
+          d.param = 0
+          driver.scheduleD(d)
+        }
         case Opcode.A.ACQUIRE_BLOCK => {
           assert(ok)
           val probe = handleCoherency(a, Param.Grow.getCap(a.param))

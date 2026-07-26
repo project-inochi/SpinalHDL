@@ -69,7 +69,7 @@ class Monitor (val bus : Bus, cd : ClockDomain) {
   val e = bus.p.withBCE generate StreamMonitor(bus.e, cd)(p => onE(TransactionE(p)))
   val d = StreamMonitor(bus.d, cd) {p =>
     val address = p.opcode.toEnum match {
-      case Opcode.D.ACCESS_ACK | Opcode.D.ACCESS_ACK_DATA | Opcode.D.GRANT | Opcode.D.GRANT_DATA=> aToD(p.source.toInt)
+      case Opcode.D.ACCESS_ACK | Opcode.D.ACCESS_ACK_DATA | Opcode.D.HINT_ACK | Opcode.D.GRANT | Opcode.D.GRANT_DATA=> aToD(p.source.toInt)
       case Opcode.D.RELEASE_ACK => cToD(p.source.toInt)
     }
     fad.push(TransactionD(p, address))

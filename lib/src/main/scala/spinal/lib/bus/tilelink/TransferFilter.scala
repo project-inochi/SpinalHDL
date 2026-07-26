@@ -86,6 +86,7 @@ class TransferFilter(unp : NodeParameters, dnp : NodeParameters, spec : Seq[Mapp
       Opcode.A.PUT_FULL_DATA -> Opcode.D.ACCESS_ACK(),
       Opcode.A.PUT_PARTIAL_DATA -> Opcode.D.ACCESS_ACK(),
       Opcode.A.GET -> Opcode.D.ACCESS_ACK_DATA(),
+      Opcode.A.INTENT -> Opcode.D.HINT_ACK(),
       Opcode.A.ACQUIRE_BLOCK -> Opcode.D.GRANT_DATA(),
       Opcode.A.ACQUIRE_PERM -> Opcode.D.GRANT()
     )

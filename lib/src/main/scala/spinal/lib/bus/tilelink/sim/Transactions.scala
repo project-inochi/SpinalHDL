@@ -161,7 +161,7 @@ class TransactionA extends TransactionABCD{
     case Opcode.A.PUT_FULL_DATA | Opcode.A.PUT_PARTIAL_DATA => true
     case _ => false
   }
-  override def withMask = withData
+  override def withMask = withData || opcode == Opcode.A.INTENT
 
 
   override def assertBeatOf(that: TransactionABCD, offset : Int) = {
@@ -394,6 +394,9 @@ class TransactionD extends TransactionABCD{
           }
           case Opcode.A.ACQUIRE_PERM => {
             opcode == Opcode.D.GRANT
+          }
+          case Opcode.A.INTENT => {
+            opcode == Opcode.D.HINT_ACK
           }
         }
       }

@@ -113,7 +113,7 @@ class MasterAgent (val bus : Bus, val cd : ClockDomain)(implicit idAllocator: Id
     import Opcode.D._
     d.opcode match {
       case RELEASE_ACK =>  callbackOnCtoD(d.source.toInt)(d)
-      case ACCESS_ACK | ACCESS_ACK_DATA | GRANT | GRANT_DATA =>  callbackOnAtoD(d.source.toInt)(d)
+      case ACCESS_ACK | ACCESS_ACK_DATA | HINT_ACK | GRANT | GRANT_DATA =>  callbackOnAtoD(d.source.toInt)(d)
     }
   }
   override def onE(e : TransactionE) : Unit = {
@@ -197,6 +197,44 @@ class MasterAgent (val bus : Bus, val cd : ClockDomain)(implicit idAllocator: Id
     freeDebugId(debugId)
     d
   }
+
+  def intent(source : Int, address : Long, bytes : Int, param : Int) : TransactionD = {
+    require(bytes > 0 && isPow2(bytes) && address % bytes == 0)
+
+    val debugId = allocateDebugId()
+    val a = TransactionA()
+    a.opcode = Opcode.A.INTENT
+    a.param = param
+    a.source = source
+    a.address = address
+    a.size = log2Up(bytes)
+    a.mask = Array.fill(bytes)(true)
+    a.data = null
+    a.corrupt = false
+    a.debugId = debugId
+    driver.scheduleA(a)
+
+    val d = waitAtoD(source)
+    assert(d.opcode == Opcode.D.HINT_ACK, s"Unexpected transaction on $bus")
+    assert(d.bytes == bytes, s"Unexpected transaction on $bus")
+    freeDebugId(debugId)
+    d
+  }
+
+  def prefetchRead(source : Int, address : Long, bytes : Int): TransactionD =
+    intent(source, address, bytes, Param.Intent.PREFETCH_READ)
+
+  def prefetchWrite(source : Int, address : Long, bytes : Int): TransactionD =
+    intent(source, address, bytes, Param.Intent.PREFETCH_WRITE)
+
+  def cboInval(source : Int, address : Long, bytes : Int): TransactionD =
+    intent(source, address, bytes, Param.Intent.CBO_INVAL)
+
+  def cboClean(source : Int, address : Long, bytes : Int): TransactionD =
+    intent(source, address, bytes, Param.Intent.CBO_CLEAN)
+
+  def cboFlush(source : Int, address : Long, bytes : Int): TransactionD =
+    intent(source, address, bytes, Param.Intent.CBO_FLUSH)
 
 
 

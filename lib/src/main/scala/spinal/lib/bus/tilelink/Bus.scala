@@ -14,9 +14,10 @@ import scala.collection.mutable.ArrayBuffer
 object Opcode extends AreaRoot{
   val A = new SpinalEnum{
     // If you extends that list, don't forget to update the tilelink Decoder
-    val PUT_FULL_DATA, PUT_PARTIAL_DATA, GET, ACQUIRE_BLOCK, ACQUIRE_PERM = newElement()
+    val PUT_FULL_DATA, PUT_PARTIAL_DATA, GET, INTENT, ACQUIRE_BLOCK, ACQUIRE_PERM = newElement()
     defaultEncoding = SpinalEnumEncoding("enc")(
       GET -> 4,
+      INTENT -> 5,
       PUT_FULL_DATA -> 0,
       PUT_PARTIAL_DATA -> 1,
       ACQUIRE_BLOCK -> 6,
@@ -52,16 +53,17 @@ object Opcode extends AreaRoot{
   }
 
   val D = new SpinalEnum{
-    val ACCESS_ACK, ACCESS_ACK_DATA, GRANT, GRANT_DATA, RELEASE_ACK = newElement()
+    val ACCESS_ACK, ACCESS_ACK_DATA, HINT_ACK, GRANT, GRANT_DATA, RELEASE_ACK = newElement()
     defaultEncoding = SpinalEnumEncoding("enc")(
       ACCESS_ACK      -> 0,
       ACCESS_ACK_DATA -> 1,
+      HINT_ACK        -> 2,
       GRANT       -> 4,
       GRANT_DATA  -> 5,
       RELEASE_ACK -> 6
     )
-    def fromA(opcode : C) : Bool = List(ACCESS_ACK, ACCESS_ACK_DATA, GRANT, GRANT_DATA).map(opcode === _).orR
-    def isFinal(opcode : C) : Bool = List(ACCESS_ACK, ACCESS_ACK_DATA, RELEASE_ACK).map(opcode === _).orR
+    def fromA(opcode : C) : Bool = List(ACCESS_ACK, ACCESS_ACK_DATA, HINT_ACK, GRANT, GRANT_DATA).map(opcode === _).orR
+    def isFinal(opcode : C) : Bool = List(ACCESS_ACK, ACCESS_ACK_DATA, HINT_ACK, RELEASE_ACK).map(opcode === _).orR
     def isData(opcode : C) : Bool = List(ACCESS_ACK_DATA, GRANT_DATA).map(opcode === _).orR
   }
 }
@@ -70,6 +72,14 @@ object Param{
   val Hint = new Area{
     val NONE = 0
     val NO_ALLOCATE_ON_MISS = 2
+  }
+
+  val Intent = new Area {
+    val PREFETCH_READ  = 0
+    val PREFETCH_WRITE = 1
+    val CBO_INVAL      = 5
+    val CBO_CLEAN      = 6
+    val CBO_FLUSH      = 7
   }
 
   val Cap = new Area {

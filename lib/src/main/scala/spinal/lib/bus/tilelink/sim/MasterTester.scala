@@ -50,6 +50,14 @@ class MasterTester(val m : MasterSpec, val agent : MasterAgent){
     Array.fill[Boolean](bytes)(simRandom.nextBoolean())
   }
 
+  // Drop CBO_INVAL as the reference model does not support it.
+  val intentParams = Seq(
+    Param.Intent.CBO_CLEAN,
+    Param.Intent.CBO_FLUSH,
+    Param.Intent.PREFETCH_READ,
+    Param.Intent.PREFETCH_WRITE,
+  )
+
   def startPerSource(perSourceBurst : Int, globalLock : Option[SimMutex] = None) {
     for (masterParam <- node.m.masters) {
       val locks = mutable.HashMap[Long, SimMutex]()
@@ -104,6 +112,9 @@ class MasterTester(val m : MasterSpec, val agent : MasterAgent){
             }
             add(_.putFull){(address, bytes) =>
               agent.putFullData(sourceId, address, randomizedData(bytes))
+            }
+            add(_.hint){(address, bytes) =>
+              agent.intent(sourceId, address, bytes, intentParams.randomPick())
             }
             // acquireBlock NtoB
             add(_.acquireB){(address, bytes) =>
@@ -192,6 +203,11 @@ class MasterTester(val m : MasterSpec, val agent : MasterAgent){
               }
               deniedOn(_.putFull){(address, bytes) =>
                 val d = agent.putFullData(sourceId, address, randomizedData(bytes))
+                assert(d.denied)
+                assert(!d.corrupt)
+              }
+              deniedOn(_.hint){(address, bytes) =>
+                val d = agent.intent(sourceId, address, bytes, intentParams.randomPick())
                 assert(d.denied)
                 assert(!d.corrupt)
               }

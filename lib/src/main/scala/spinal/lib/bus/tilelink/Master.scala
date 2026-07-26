@@ -22,6 +22,7 @@ case class M2sTransfers(acquireT     : SizeRange = SizeRange.none,
     case Opcode.A.PUT_FULL_DATA => putFull.some
     case Opcode.A.PUT_PARTIAL_DATA => putPartial.some
     case Opcode.A.GET => get.some
+    case Opcode.A.INTENT => hint.some
     case Opcode.A.ACQUIRE_BLOCK => withBCE
     case Opcode.A.ACQUIRE_PERM  => withBCE
   }
@@ -30,6 +31,7 @@ case class M2sTransfers(acquireT     : SizeRange = SizeRange.none,
     case Opcode.A.PUT_FULL_DATA => putFull.some
     case Opcode.A.PUT_PARTIAL_DATA => putPartial.some
     case Opcode.A.GET => get.some
+    case Opcode.A.INTENT => hint.some
     case Opcode.A.ACQUIRE_BLOCK => withBCE
     case Opcode.A.ACQUIRE_PERM  => withBCE
     case Opcode.C.PROBE_ACK | Opcode.C.PROBE_ACK_DATA | Opcode.C.RELEASE | Opcode.C.RELEASE_DATA => withBCE
@@ -45,7 +47,7 @@ case class M2sTransfers(acquireT     : SizeRange = SizeRange.none,
 //    body(7, acquireB  )
 //  }
   def withBCE = acquireT.some || acquireB.some
-  def withDataA = putFull.some || putPartial.some
+  def withDataA = putFull.some || putPartial.some || hint.some
   def withDataD = get.some || acquireT.some || acquireB.some || logical.some || arithmetic.some
   def withAny = withDataA || withDataD || withBCE || hint.some
 
@@ -114,7 +116,8 @@ case class M2sTransfers(acquireT     : SizeRange = SizeRange.none,
     logical.max,
     get.max,
     putFull.max,
-    putPartial.max
+    putPartial.max,
+    hint.max
   ).max
 
   def contains(opcode : Opcode.A.C) : Bool = {
@@ -122,6 +125,7 @@ case class M2sTransfers(acquireT     : SizeRange = SizeRange.none,
       Opcode.A.GET              -> Bool(get.some),
       Opcode.A.PUT_FULL_DATA    -> Bool(putFull.some),
       Opcode.A.PUT_PARTIAL_DATA -> Bool(putPartial.some),
+      Opcode.A.INTENT           -> Bool(hint.some),
       Opcode.A.ACQUIRE_BLOCK    -> Bool(acquireB.some || acquireT.some),
       Opcode.A.ACQUIRE_PERM     -> Bool(acquireB.some || acquireT.some)
     )
@@ -274,5 +278,3 @@ case class M2sSupport(transfers : M2sTransfers,
   def withAddressWidth(w: Int): M2sSupport = copy(addressWidth = w)
   def dataBytes = dataWidth/8
 }
-
-
