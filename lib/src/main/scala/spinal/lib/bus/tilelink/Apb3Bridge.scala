@@ -53,15 +53,17 @@ class Apb3Bridge(p : NodeParameters) extends Component{
   io.down.PWDATA := buffered.data
 
   val rsp = cloneOf(io.up.d)
+  val responseOpcode = isGet.mux(Opcode.D.ACCESS_ACK_DATA, Opcode.D.ACCESS_ACK)
+  val denied = io.down.PSLVERROR
   rsp.valid := forked.fire
-  rsp.opcode := isGet.mux(Opcode.D.ACCESS_ACK_DATA, Opcode.D.ACCESS_ACK)
+  rsp.opcode := responseOpcode
   rsp.param := 0
   rsp.source := buffered.source
   rsp.sink := 0
   rsp.size := buffered.size
   rsp.data := io.down.PRDATA
-  rsp.denied := io.down.PSLVERROR
-  rsp.corrupt := False
+  rsp.denied := denied
+  rsp.corrupt := denied && Opcode.D.isData(responseOpcode)
 
   io.up.d << rsp.halfPipe()
   io.down.PSEL(0) clearWhen(io.up.d.valid)
