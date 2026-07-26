@@ -101,6 +101,22 @@ class Checker(p : BusParameter, mappings : Seq[Endpoint], checkMapping : Boolean
 
     a.opcode match {
       case Opcode.A.PUT_FULL_DATA | Opcode.A.PUT_PARTIAL_DATA | Opcode.A.GET=>
+      case Opcode.A.INTENT => {
+        assert(Set(
+          Param.Intent.PREFETCH_READ,
+          Param.Intent.PREFETCH_WRITE,
+          Param.Intent.CBO_INVAL,
+          Param.Intent.CBO_CLEAN,
+          Param.Intent.CBO_FLUSH
+        ).contains(a.param), s"Illegal Intent param ${a.param}")
+        assert(a.size >= p.sizeMin && a.size <= p.sizeMax, s"Illegal Intent size ${a.size}")
+        assert(a.mask != null && a.mask.length == p.dataBytes)
+
+        val offset = (a.address % p.dataBytes).toInt
+        val range = offset until (offset + (a.bytes min p.dataBytes))
+        assert(a.mask.zipWithIndex.forall{case (m, i) => if (range.contains(i)) m else !m}, s"Intent needs mask to be set at $range")
+        assert(!a.corrupt, "Intent A payload must not be corrupt")
+      }
       case Opcode.A.ACQUIRE_BLOCK | Opcode.A.ACQUIRE_PERM =>
     }
 
@@ -115,9 +131,10 @@ class Checker(p : BusParameter, mappings : Seq[Endpoint], checkMapping : Boolean
       }
     }
 
-    if(checkMapping) idCallback.add(a.debugId, ctx){
+    if(checkMapping) idCallback.add(a.debugId, ctx) {
       case o : OrderingArgs => {
         val address = ctx.chunk.globalToLocal(a.address + o.offset).toLong
+        assert(a.opcode != Opcode.A.INTENT || !ctx.isSet, s"Intent received multiple ordering events :\n$a")
         ctx.isSet = true
         ctx.endpoint.model match {
           case mem : SparseMemory => a.opcode match {
@@ -135,6 +152,7 @@ class Checker(p : BusParameter, mappings : Seq[Endpoint], checkMapping : Boolean
               ctx.ref = mem.readBytes(address, o.bytes)
             }
             case Opcode.A.ACQUIRE_PERM =>
+            case Opcode.A.INTENT =>
           }
         }
       }
@@ -221,6 +239,26 @@ class Checker(p : BusParameter, mappings : Seq[Endpoint], checkMapping : Boolean
         inflightA(d.source) = null
         if(checkMapping) idCallback.remove(ctx.a.debugId, ctx)
       }
+      case Opcode.D.HINT_ACK => {
+        val ctx = inflightA(d.source)
+        assert(ctx != null, s"HintAck without outstanding A source ${d.source}")
+        assert(ctx.a.opcode == Opcode.A.INTENT, s"HintAck does not match an Intent :\n${ctx.a}\n$d")
+        assert(d.param == 0, s"HintAck param must be zero :\n$d")
+        assert(!d.corrupt, s"HintAck must not be corrupt :\n$d")
+        assert(!d.withData, s"HintAck must not carry data :\n$d")
+        d.assertRspOf(ctx.a)
+        if(checkMapping) {
+          if(ctx.denied) {
+            assert(d.denied, s"Intent mapped to a denying endpoint but was accepted :\n${ctx.a}\n$d")
+          } else if(d.denied) {
+            assert(!ctx.isSet, s"Denied Intent reached its ordering point :\n${ctx.a}\n$d")
+          } else {
+            assert(ctx.isSet, s"Intent HintAck arrived before its ordering point :\n${ctx.a}\n$d")
+          }
+          idCallback.remove(ctx.a.debugId, ctx)
+        }
+        inflightA(d.source) = null
+      }
       case Opcode.D.RELEASE_ACK => {
         inflightC.remove(d.source) match {
           case Some(c) => doShrink(d.source, c.address, c.param)
@@ -230,7 +268,7 @@ class Checker(p : BusParameter, mappings : Seq[Endpoint], checkMapping : Boolean
     }
 
     d.opcode match{
-      case Opcode.D.ACCESS_ACK | Opcode.D.ACCESS_ACK_DATA | Opcode.D.RELEASE_ACK=>
+      case Opcode.D.ACCESS_ACK | Opcode.D.ACCESS_ACK_DATA | Opcode.D.HINT_ACK | Opcode.D.RELEASE_ACK=>
       case Opcode.D.GRANT | Opcode.D.GRANT_DATA  =>  {
         assert(!inflightD.contains(d.sink))
         inflightD(d.sink) = d
