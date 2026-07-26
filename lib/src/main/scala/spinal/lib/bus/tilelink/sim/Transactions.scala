@@ -56,24 +56,26 @@ abstract class TransactionABCD {
     val ret = Array.fill(beats)(copyNoData())
     for((beat, beatId) <- ret.zipWithIndex){
       val withMask = this.withMask
-      if(withData){
+      if(withMask || withData){
         val address = beat.address.toInt + beatId*bytesInBeat
         var accessOffset = address & (bytes - 1)
         val beatOffset = address & (bytesPerBeat - 1)
-        beat.data = new Array[Byte](bytesPerBeat)
-        if(bytes < bytesPerBeat) simRandom.nextBytes(beat.data)
         if(withMask) {
           beat.mask = new Array(bytesPerBeat)
+        }
+        if(withData) {
+          beat.data = new Array[Byte](bytesPerBeat)
+          if(bytes < bytesPerBeat) simRandom.nextBytes(beat.data)
         }
         for (i <- 0 until bytesInBeat) {
           val to = beatOffset + i
           val from = accessOffset + i
           if(withMask) {
             beat.mask(to) = mask(from)
-            if(mask(from)) {
+            if(withData && mask(from)) {
               beat.data(to) = data(from)
             }
-          } else {
+          } else if(withData) {
             beat.data(to) = data(from)
           }
         }
@@ -121,8 +123,11 @@ class TransactionA extends TransactionABCD{
     size = p.size.toInt
     if(p.withData) {
       corrupt = p.corrupt.toBoolean
+      if(withMask) {
+        val value = p.mask.toBigInt
+        mask = Array.tabulate(p.mask.getBitsWidth)(value.testBit)
+      }
       if(withData) {
-        mask = p.mask.toBooleans
         data = p.data.toBytes
       }
     }
@@ -138,8 +143,13 @@ class TransactionA extends TransactionABCD{
     p.size #= size
     if(p.withData) {
       p.corrupt #= corrupt
+      if (withMask) {
+        val value = mask.zipWithIndex.foldLeft(BigInt(0)) {
+          case (acc, (enabled, index)) => if(enabled) acc.setBit(index) else acc
+        }
+        p.mask #= value
+      }
       if (withData) {
-        p.mask #= mask
         p.data #= data
       }
     }
@@ -325,7 +335,7 @@ class TransactionD extends TransactionABCD{
     }
     this
   }
-  
+
   def write(p : ChannelD): this.type ={
     p.opcode #= opcode
     p.param #= param
@@ -429,7 +439,9 @@ class TransactionAggregator[T <: TransactionABCD](bytesPerBeat : Int)(callback :
         access = f.copyNoData().asInstanceOf[T]
         if (access.withData) {
           access.data = Array.fill[Byte](bytes)(0)
-          if(access.withMask)access.mask = Array.fill[Boolean](bytes)(false)
+          if (access.withMask) access.mask = Array.fill[Boolean](bytes)(false)
+        } else if (access.withMask) {
+          access.mask = f.mask.clone()
         }
       }
       case _ => {
