@@ -113,11 +113,11 @@ case class FlushArbiter(op : FlushParam, ports : Int) extends Component{
 
 object Cache extends AreaObject{
   val CtrlOpcode = new SpinalEnum {
-    val ACQUIRE_BLOCK, ACQUIRE_PERM, RELEASE, RELEASE_DATA, PUT_PARTIAL_DATA, PUT_FULL_DATA, GET, EVICT, FLUSH = newElement()
+    val ACQUIRE_BLOCK, ACQUIRE_PERM, RELEASE, RELEASE_DATA, PUT_PARTIAL_DATA, PUT_FULL_DATA, GET, EVICT, FLUSH, INTENT = newElement()
   }
 
   val ToUpDOpcode = new SpinalEnum {
-    val NONE, ACCESS_ACK, ACCESS_ACK_DATA, GRANT, GRANT_DATA, RELEASE_ACK = newElement()
+    val NONE, ACCESS_ACK, ACCESS_ACK_DATA, GRANT, GRANT_DATA, RELEASE_ACK, HINT_ACK = newElement()
   }
 
   def downM2s(name : Nameable,
@@ -598,7 +598,8 @@ class Cache(val p : CacheParam) extends Component {
       Opcode.A.PUT_PARTIAL_DATA -> CtrlOpcode.PUT_PARTIAL_DATA(),
       Opcode.A.PUT_FULL_DATA -> CtrlOpcode.PUT_FULL_DATA(),
       Opcode.A.ACQUIRE_PERM -> CtrlOpcode.ACQUIRE_PERM(),
-      Opcode.A.ACQUIRE_BLOCK -> CtrlOpcode.ACQUIRE_BLOCK()
+      Opcode.A.ACQUIRE_BLOCK -> CtrlOpcode.ACQUIRE_BLOCK(),
+      Opcode.A.INTENT -> CtrlOpcode.INTENT()
     )
     toCtrl.toTrunk := conv.param =/= Param.Grow.NtoB
     toCtrl.address := conv.address
@@ -854,7 +855,8 @@ class Cache(val p : CacheParam) extends Component {
 
       val arbiter = StreamArbiterFactory().lowerFirst.noLock.buildOn(cmds)
 
-      when(fromUpA.toCtrl.fire || withFlushFsm.mux(flushFsm.cmd.fire, False) || withFlushBus.mux(fromFlushBus.cmd.fire, False)) {
+      when(fromUpA.toCtrl.fire && fromUpA.toCtrl.opcode =/= CtrlOpcode.INTENT ||
+        withFlushFsm.mux(flushFsm.cmd.fire, False) || withFlushBus.mux(fromFlushBus.cmd.fire, False)) {
         loopback.occupancy.increment()
       }
 
@@ -882,6 +884,8 @@ class Cache(val p : CacheParam) extends Component {
     val preCtrl = new prepStage.Area{
       val PROBE_REGION = insert(p.coherentRegion(CTRL_CMD.address))
       val ALLOCATE_ON_MISS = insert(p.allocateOnMiss(CTRL_CMD.opcode, CTRL_CMD.source, CTRL_CMD.address, CTRL_CMD.size, CTRL_CMD.upParam)) //TODO
+      val IS_INTENT = insert(List(INTENT()).sContains(CTRL_CMD.opcode))
+      val IS_INTENT_CMO = insert(CTRL_CMD.opcode === INTENT && List(Param.Intent.CBO_CLEAN, Param.Intent.CBO_FLUSH, Param.Intent.CBO_INVAL).map(CTRL_CMD.upParam === _).orR)
       val FROM_A = insert(List(GET(), PUT_FULL_DATA(), PUT_PARTIAL_DATA(), ACQUIRE_BLOCK(), ACQUIRE_PERM(), FLUSH()).sContains(CTRL_CMD.opcode))
       val FROM_C_RELEASE = insert(List(RELEASE(), RELEASE_DATA()).sContains(CTRL_CMD.opcode))
       val GET_PUT = insert(List(GET(), PUT_FULL_DATA(), PUT_PARTIAL_DATA()).sContains(CTRL_CMD.opcode))
@@ -1019,7 +1023,7 @@ class Cache(val p : CacheParam) extends Component {
         val plru = new Plru(cacheWays, false)
         plru.io.context.state := CACHE_PLRU
 
-        cache.plru.write.valid := CACHE_HIT
+        cache.plru.write.valid := CACHE_HIT && (!preCtrl.IS_INTENT || preCtrl.IS_INTENT_CMO)
         plru.io.update.id := CACHE_HIT_WAY_ID
 
         when(askAllocate) {
@@ -1039,7 +1043,7 @@ class Cache(val p : CacheParam) extends Component {
 
       backendWayId := CACHE_HIT_WAY_ID | olderWay.wayId.andMask(askAllocate)
 
-      cache.tags.write.valid := tags.CACHE_HITS.orR || askAllocate
+      cache.tags.write.valid := (tags.CACHE_HITS.orR || askAllocate) && (!preCtrl.IS_INTENT || preCtrl.IS_INTENT_CMO)
       cache.tags.write.address := CTRL_CMD.address(setsRange)
       cache.tags.write.mask := tags.CACHE_HITS | UIntToOh(olderWay.wayId).andMask(askAllocate)
       cache.tags.write.data.loaded := True
@@ -1662,7 +1666,8 @@ class Cache(val p : CacheParam) extends Component {
         RELEASE_ACK     -> inserter.LAST,
         GRANT           -> inserter.LAST,
         ACCESS_ACK_DATA -> inserter.IN_UP_A,
-        GRANT_DATA      -> True
+        GRANT_DATA      -> True,
+        HINT_ACK        -> True
       )
       val toUpDFork = forkStream(enabled = needForkToUpD)
       val toUpD = toUpDFork.haltWhen(victimHazard || hazardUpC || CMD.toUpD === RELEASE_ACK && toCacheFork.isStall).swapPayload(io.up.d.payloadType)
@@ -1671,7 +1676,8 @@ class Cache(val p : CacheParam) extends Component {
         ACCESS_ACK_DATA -> Opcode.D.ACCESS_ACK_DATA(),
         GRANT           -> Opcode.D.GRANT(),
         GRANT_DATA      -> Opcode.D.GRANT_DATA(),
-        RELEASE_ACK     -> Opcode.D.RELEASE_ACK()
+        RELEASE_ACK     -> Opcode.D.RELEASE_ACK(),
+        HINT_ACK        -> Opcode.D.HINT_ACK()
       )
       toUpD.param   := CMD.toT.mux[Bits](Param.Cap.toT, Param.Cap.toB).resized
       toUpD.source  := CMD.source

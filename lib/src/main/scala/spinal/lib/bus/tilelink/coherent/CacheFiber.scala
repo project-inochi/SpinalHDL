@@ -44,7 +44,8 @@ class CacheFiber(withCtrl : Boolean = false, flushBusParam : FlushParam = null) 
           val isMain = args.node.hasTag(PMA.MAIN)
           t.copy(
             acquireT = if(isMain && canGet && canPut) SizeRange(parameter.blockSize) else SizeRange.none,
-            acquireB = if(isMain && canGet) SizeRange(parameter.blockSize) else SizeRange.none
+            acquireB = if(isMain && canGet) SizeRange(parameter.blockSize) else SizeRange.none,
+            hint = if(parameter.withIntent) SizeRange(parameter.blockSize) else SizeRange.none
           )
         }
       }
@@ -78,7 +79,8 @@ class CacheFiber(withCtrl : Boolean = false, flushBusParam : FlushParam = null) 
           acquireB = SizeRange(parameter.blockSize),
           get = SizeRange.upTo(parameter.blockSize),
           putFull = SizeRange.upTo(parameter.blockSize),
-          putPartial = SizeRange.upTo(parameter.blockSize)
+          putPartial = SizeRange.upTo(parameter.blockSize),
+          hint = if(parameter.withIntent) SizeRange(parameter.blockSize) else SizeRange.none
         )
       )
     )
