@@ -32,12 +32,13 @@ case class CacheParam(var unp : NodeParameters,
                       var flushCompletionsCount : Int = 1,
                       var selfFlush : SelfFLush = null,
                       var flushBusParam : FlushParam = null,
+                      var withIntent : Boolean = false,
                       var allocateOnMiss : (Cache.CtrlOpcode.C, UInt, UInt, UInt, Bits) => Bool = null // opcode, source, address, size
                          ) {
   assert(isPow2(cacheBytes))
 
   def withSelfFlush = selfFlush != null
-  def withFlush = withCtrl || withSelfFlush || flushBusParam != null
+  def withFlush = withCtrl || withSelfFlush || flushBusParam != null || withIntent
   def withFlushFsm = withCtrl || withSelfFlush
   def withFlushBus = flushBusParam != null
   def withCtrl = cnp != null
@@ -117,7 +118,7 @@ object Cache extends AreaObject{
   }
 
   val ToUpDOpcode = new SpinalEnum {
-    val NONE, ACCESS_ACK, ACCESS_ACK_DATA, GRANT, GRANT_DATA, RELEASE_ACK, HINT_ACK = newElement()
+    val NONE, ACCESS_ACK, ACCESS_ACK_DATA, GRANT, GRANT_DATA, RELEASE_ACK = newElement()
   }
 
   def downM2s(name : Nameable,
@@ -344,7 +345,8 @@ class Cache(val p : CacheParam) extends Component {
     val fromUpA = Bool()
     val fromUpC = Bool()
     val toDownA = Bool() //else to cache
-    def toCache = !toDownA
+    val copyToCache = Bool()
+    def toCache = !toDownA || copyToCache
     val toUpD = Cache.ToUpDOpcode()
 
     val toT = Bool()
@@ -406,12 +408,17 @@ class Cache(val p : CacheParam) extends Component {
 
     val pending = new Area{
       val victim, primary, acquire, victimRead, victimWrite, cacheWrite = Reg(Bool())
-      val flushBus = withFlushBus generate Reg(Bool())
+      val flush = withFlush generate RegInit(False)
 
       val flags = ArrayBuffer[Bool](victim, acquire, primary, victimRead, victimWrite, cacheWrite)
-      if(withFlushBus) flags += flushBus
+      val maintenanceReady = withFlush generate flags.norR
+      if(withFlush) flags += flush
+
       fire setWhen(flags.norR)
     }
+    val cmoOrigin = withIntent generate RegInit(False)
+    val cmoResponseSize = withIntent generate (Reg(UInt(ubp.sizeWidth bits)) init(0))
+    val cmoDebugId = withIntent generate Reg(DebugId())
   }
 
   case class CtxDownD() extends Bundle {
@@ -855,8 +862,7 @@ class Cache(val p : CacheParam) extends Component {
 
       val arbiter = StreamArbiterFactory().lowerFirst.noLock.buildOn(cmds)
 
-      when(fromUpA.toCtrl.fire && fromUpA.toCtrl.opcode =/= CtrlOpcode.INTENT ||
-        withFlushFsm.mux(flushFsm.cmd.fire, False) || withFlushBus.mux(fromFlushBus.cmd.fire, False)) {
+      when(fromUpA.toCtrl.fire && (fromUpA.toCtrl.opcode =/= CtrlOpcode.INTENT || List(Param.Intent.CBO_CLEAN, Param.Intent.CBO_FLUSH, Param.Intent.CBO_INVAL).map(fromUpA.toCtrl.upParam === _).orR) || withFlushFsm.mux(flushFsm.cmd.fire, False) || withFlushBus.mux(fromFlushBus.cmd.fire, False)) {
         loopback.occupancy.increment()
       }
 
@@ -886,18 +892,19 @@ class Cache(val p : CacheParam) extends Component {
       val ALLOCATE_ON_MISS = insert(p.allocateOnMiss(CTRL_CMD.opcode, CTRL_CMD.source, CTRL_CMD.address, CTRL_CMD.size, CTRL_CMD.upParam)) //TODO
       val IS_INTENT = insert(List(INTENT()).sContains(CTRL_CMD.opcode))
       val IS_INTENT_CMO = insert(CTRL_CMD.opcode === INTENT && List(Param.Intent.CBO_CLEAN, Param.Intent.CBO_FLUSH, Param.Intent.CBO_INVAL).map(CTRL_CMD.upParam === _).orR)
-      val FROM_A = insert(List(GET(), PUT_FULL_DATA(), PUT_PARTIAL_DATA(), ACQUIRE_BLOCK(), ACQUIRE_PERM(), FLUSH()).sContains(CTRL_CMD.opcode))
+      val FROM_A = insert(List(GET(), PUT_FULL_DATA(), PUT_PARTIAL_DATA(), ACQUIRE_BLOCK(), ACQUIRE_PERM(), INTENT(), FLUSH()).sContains(CTRL_CMD.opcode))
       val FROM_C_RELEASE = insert(List(RELEASE(), RELEASE_DATA()).sContains(CTRL_CMD.opcode))
       val GET_PUT = insert(List(GET(), PUT_FULL_DATA(), PUT_PARTIAL_DATA()).sContains(CTRL_CMD.opcode))
       val ACQUIRE = insert(List(ACQUIRE_PERM(), ACQUIRE_BLOCK()).sContains(CTRL_CMD.opcode))
       val IS_RELEASE = insert(List(RELEASE(), RELEASE_DATA()).sContains(CTRL_CMD.opcode))
       val IS_EVICT = insert(List(EVICT()).sContains(CTRL_CMD.opcode))
-      val IS_FLUSH = insert(List(FLUSH()).sContains(CTRL_CMD.opcode))
+      val IS_CMO_CLEAN = insert(CTRL_CMD.upParam === Param.Intent.CBO_CLEAN && (CTRL_CMD.opcode === INTENT || IS_EVICT))
+      val IS_FLUSH = insert(List(FLUSH()).sContains(CTRL_CMD.opcode) || IS_INTENT_CMO)
       val IS_GET = insert(List(GET()).sContains(CTRL_CMD.opcode))
       val IS_PUT = insert(List(PUT_FULL_DATA(), PUT_PARTIAL_DATA()).sContains(CTRL_CMD.opcode))
       val IS_PUT_FULL_BLOCK = insert(CTRL_CMD.opcode === CtrlOpcode.PUT_FULL_DATA && CTRL_CMD.size === log2Up(blockSize))
       val WRITE_DATA = insert(List(PUT_PARTIAL_DATA(), PUT_FULL_DATA(), RELEASE_DATA()).sContains(CTRL_CMD.opcode))
-      val GS_NEED = insert(List(ACQUIRE_BLOCK, ACQUIRE_PERM, RELEASE_DATA, PUT_PARTIAL_DATA, PUT_FULL_DATA, GET, FLUSH).map(_.craft()).sContains(CTRL_CMD.opcode))
+      val GS_NEED = insert(List(ACQUIRE_BLOCK, ACQUIRE_PERM, RELEASE_DATA, PUT_PARTIAL_DATA, PUT_FULL_DATA, GET, INTENT, FLUSH).map(_.craft()).sContains(CTRL_CMD.opcode))
       val GS_HITS = insert(gs.slots.map(s => s.valid && CTRL_CMD.address(addressCheckRange) === s.address(addressCheckRange)).asBits)
       val GS_HIT = insert(GS_HITS.orR)
       val GS_OH = insert(UIntToOh(CTRL_CMD.gsId, generalSlotCount))
@@ -981,7 +988,8 @@ class Cache(val p : CacheParam) extends Component {
       val gsPendingVictimReadWrite = False
       val gsPendingCacheWrite = False
       val gsPendingPrimary = True
-      val gsFlushBus = False
+      val gsFlush = False
+      val gsCmoOrigin = False
       val gsAllowGet = False
 
       //TODO don't forget to ensure that a victim get out of the cache before downD/upA erase it
@@ -1073,7 +1081,12 @@ class Cache(val p : CacheParam) extends Component {
             s.pending.primary := gsPendingPrimary
             s.pending.acquire := preCtrl.ACQUIRE
             s.sourceId := CTRL_CMD.source
-            if(withFlushBus) s.pending.flushBus := gsFlushBus
+            if(withFlush) s.pending.flush := gsFlush
+            if(withIntent) {
+              s.cmoOrigin := gsCmoOrigin
+              s.cmoResponseSize := CTRL_CMD.size
+              s.cmoDebugId := CTRL_CMD.debugId
+            }
           }
           when(up.isReady) {
             s.valid := True
@@ -1106,6 +1119,7 @@ class Cache(val p : CacheParam) extends Component {
       toWriteBackend.toUpD      := Cache.ToUpDOpcode.NONE()
       toWriteBackend.evict      := False
       toWriteBackend.debugId    := CTRL_CMD.debugId
+      toWriteBackend.copyToCache := False
 
       toReadDown.gsId    := gsId
       toReadDown.address := CTRL_CMD.address
@@ -1178,12 +1192,30 @@ class Cache(val p : CacheParam) extends Component {
         toWriteBackend.evict := True
         toWriteBackend.toDownA := True
         toWriteBackend.size := log2Up(blockSize)
+        if(withIntent) {
+          val onCache = preCtrl.IS_CMO_CLEAN && CTRL_CMD.withDataUpC
+          toWriteBackend.copyToCache := onCache
+
+          when(onCache && doIt) {
+            gs.slots.onSel(gsId)(_.pending.cacheWrite := True)
+          }
+        }
       }
 
       if(withFlush) when(preCtrl.IS_FLUSH){
         gsPendingPrimary := False
-        cache.tags.write.data.loaded := False
-        gsFlushBus := CTRL_CMD.upParam(0)
+        when(preCtrl.IS_CMO_CLEAN) {
+          cache.tags.write.data.loaded := True
+          cache.tags.write.data.dirty := False
+          cache.tags.write.data.trunk := False
+        } otherwise {
+          cache.tags.write.data.loaded := False
+        }
+        if(withFlushBus) gsFlush setWhen CTRL_CMD.upParam(0)
+        if(withIntent) {
+          gsCmoOrigin setWhen preCtrl.IS_INTENT_CMO
+          gsFlush setWhen preCtrl.IS_INTENT_CMO
+        }
         when(CACHE_HIT) {
           when(CACHE_LINE.owners.orR) {
             askProbe := True
@@ -1200,8 +1232,9 @@ class Cache(val p : CacheParam) extends Component {
 
           prober.cmd.opcode := CtrlOpcode.EVICT
           prober.cmd.mask := CACHE_LINE.owners
-          prober.cmd.probeToN := True
-          prober.cmd.evictClean := !CACHE_LINE.dirty
+          prober.cmd.probeToN := !preCtrl.IS_CMO_CLEAN
+          prober.cmd.evictClean := !CACHE_LINE.dirty &&
+            (!preCtrl.IS_CMO_CLEAN || !CACHE_LINE.trunk)
         }
         when(doIt){
           if(withFlushFsm) when(!CTRL_CMD.upParam(0)){
@@ -1522,6 +1555,7 @@ class Cache(val p : CacheParam) extends Component {
       toWriteBackend.bufferAId  := 0
       toWriteBackend.evict      := True
       toWriteBackend.debugId    := 0
+      toWriteBackend.copyToCache := False
     }
 
     build()
@@ -1557,6 +1591,7 @@ class Cache(val p : CacheParam) extends Component {
       cmd.toT := True
       cmd.source := buffered.source
       cmd.evict := False
+      cmd.copyToCache := False
     }
 
     val inserter = new inserterStage.Area {
@@ -1645,6 +1680,10 @@ class Cache(val p : CacheParam) extends Component {
       cache.data.upWrite.data := UP_DATA
       cache.data.upWrite.mask := UP_MASK
 
+      if(withIntent) when(toCacheFork.fire && inserter.LAST && CMD.evict && CMD.copyToCache) {
+        gs.slots.onSel(CMD.gsId)(_.pending.cacheWrite := False)
+      }
+
       val toDownAFork = forkStream(enabled = CMD.toDownA)
       val toDownA = toDownAFork.haltWhen(hazardUpC).swapPayload(io.down.a.payloadType)
       toDownA.opcode := (CMD.fromUpA && CMD.partialUpA).mux(Opcode.A.PUT_PARTIAL_DATA, Opcode.A.PUT_FULL_DATA)
@@ -1666,8 +1705,7 @@ class Cache(val p : CacheParam) extends Component {
         RELEASE_ACK     -> inserter.LAST,
         GRANT           -> inserter.LAST,
         ACCESS_ACK_DATA -> inserter.IN_UP_A,
-        GRANT_DATA      -> True,
-        HINT_ACK        -> True
+        GRANT_DATA      -> True
       )
       val toUpDFork = forkStream(enabled = needForkToUpD)
       val toUpD = toUpDFork.haltWhen(victimHazard || hazardUpC || CMD.toUpD === RELEASE_ACK && toCacheFork.isStall).swapPayload(io.up.d.payloadType)
@@ -1676,8 +1714,7 @@ class Cache(val p : CacheParam) extends Component {
         ACCESS_ACK_DATA -> Opcode.D.ACCESS_ACK_DATA(),
         GRANT           -> Opcode.D.GRANT(),
         GRANT_DATA      -> Opcode.D.GRANT_DATA(),
-        RELEASE_ACK     -> Opcode.D.RELEASE_ACK(),
-        HINT_ACK        -> Opcode.D.HINT_ACK()
+        RELEASE_ACK     -> Opcode.D.RELEASE_ACK()
       )
       toUpD.param   := CMD.toT.mux[Bits](Param.Cap.toT, Param.Cap.toB).resized
       toUpD.source  := CMD.source
@@ -1714,6 +1751,43 @@ class Cache(val p : CacheParam) extends Component {
     arbiter.io.inputs(0) << readDown.toDownA
     arbiter.io.inputs(1) << writeBackend.process.toDownA
     io.down.a << arbiter.io.output
+  }
+
+  val IntentCmoBackend = withIntent generate new Area{
+    val toUpD = Stream(io.up.d.payloadType())
+    val hits = gs.slots.map(s => s.valid && s.pending.flush && s.cmoOrigin && s.pending.maintenanceReady)
+    val hit = hits.orR
+
+    val selectedOh = Reg(Bits(generalSlotCount bits)) init(0)
+    val selecting = !selectedOh.orR && hit
+    val proposalOh = OHMasking.roundRobinNext(B(hits), selecting)
+
+    toUpD.valid := selectedOh.orR
+    toUpD.opcode := Opcode.D.HINT_ACK
+    toUpD.param := 0
+    toUpD.source := gs.slots.reader(selectedOh)(_.sourceId)
+    toUpD.sink := 0
+    toUpD.size := gs.slots.reader(selectedOh)(_.cmoResponseSize)
+    toUpD.denied := False
+    toUpD.corrupt := False
+    toUpD.data.assignDontCare()
+
+    when(selecting) {
+      selectedOh := proposalOh
+    }
+
+    val ordering = Flow(OrderingCmd(io.up.p.sizeBytes))
+    ordering.valid := selecting
+    ordering.debugId := gs.slots.reader(proposalOh)(_.cmoDebugId)
+    ordering.bytes := (U(1) << gs.slots.reader(proposalOh)(_.cmoResponseSize)).resized
+    Cache.this.addTag(OrderingTag(ordering))
+
+    when(toUpD.fire) {
+      selectedOh := 0
+      gs.slots.onMask(selectedOh) { s =>
+        s.pending.flush := False
+      }
+    }
   }
 
   val fromDownD = new StageCtrlPipeline{
@@ -1813,7 +1887,13 @@ class Cache(val p : CacheParam) extends Component {
 
       when(up.isFiring && LAST) {
         when(isVictim) {
-          gs.slots.onSel(CMD.source.resized)(_.pending.victim := False)
+          gs.slots.onSel(CMD.source.resized) { s =>
+            // TODO: add denied report for it
+            if(withIntent) when(s.cmoOrigin) {
+              assert(!CMD.denied)
+            }
+            s.pending.victim := False
+          }
         } otherwise {
           when(CTX.mergeBufferA) {
             if(ubp.withDataA) writeBackend.putMerges.push.valid := True
@@ -1828,11 +1908,12 @@ class Cache(val p : CacheParam) extends Component {
   }
 
   val toUpD = new Area{
-    val arbiter = StreamArbiterFactory().lowerFirst.lambdaLock[ChannelD](_.isLast()).build(io.up.d.payloadType, 4)
+    val arbiter = StreamArbiterFactory().lowerFirst.lambdaLock[ChannelD](_.isLast()).build(io.up.d.payloadType, if(withIntent) 5 else 4)
     arbiter.io.inputs(0) << fromDownD.process.toUpD//.m2sPipe()
     arbiter.io.inputs(1) << ctrl.process.toUpD.m2sPipe()
     arbiter.io.inputs(2) << readBackend.process.toUpD.s2mPipe()
     arbiter.io.inputs(3) << writeBackend.process.toUpDBuffered
+    if(withIntent) arbiter.io.inputs(4) << IntentCmoBackend.toUpD
 
     io.up.d << arbiter.io.output
   }
@@ -1847,7 +1928,7 @@ class Cache(val p : CacheParam) extends Component {
   val toFlushBus = withFlushBus generate new Area{
     val rsp = cloneOf(io.flush.rsp)
 
-    val hits = gs.slots.map(s => s.valid && s.pending.flushBus && !s.pending.victim)
+    val hits = gs.slots.map(s => s.valid && s.pending.flush && s.pending.maintenanceReady && (if(withIntent) !s.cmoOrigin else True))
     val hit = hits.orR
     val oh = OHMasking.roundRobinNext(B(hits), rsp.fire)
 
@@ -1855,7 +1936,7 @@ class Cache(val p : CacheParam) extends Component {
     rsp.source := gs.slots.reader(oh)(_.sourceId).resized
     when(rsp.fire) {
       gs.slots.onMask(oh) { s =>
-        s.pending.flushBus := False
+        s.pending.flush := False
       }
     }
 
