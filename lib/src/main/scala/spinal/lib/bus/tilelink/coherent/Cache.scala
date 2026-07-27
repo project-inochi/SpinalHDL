@@ -899,6 +899,7 @@ class Cache(val p : CacheParam) extends Component {
       val IS_RELEASE = insert(List(RELEASE(), RELEASE_DATA()).sContains(CTRL_CMD.opcode))
       val IS_EVICT = insert(List(EVICT()).sContains(CTRL_CMD.opcode))
       val IS_CMO_CLEAN = insert(CTRL_CMD.upParam === Param.Intent.CBO_CLEAN && (CTRL_CMD.opcode === INTENT || IS_EVICT))
+      val IS_CMO_INVAL = insert(CTRL_CMD.upParam === Param.Intent.CBO_INVAL && (CTRL_CMD.opcode === INTENT || IS_EVICT))
       val IS_FLUSH = insert(List(FLUSH()).sContains(CTRL_CMD.opcode) || IS_INTENT_CMO)
       val IS_GET = insert(List(GET()).sContains(CTRL_CMD.opcode))
       val IS_PUT = insert(List(PUT_FULL_DATA(), PUT_PARTIAL_DATA()).sContains(CTRL_CMD.opcode))
@@ -1190,11 +1191,11 @@ class Cache(val p : CacheParam) extends Component {
       when(preCtrl.IS_EVICT){
         askWriteBackend := True
         toWriteBackend.evict := True
-        toWriteBackend.toDownA := True
+        toWriteBackend.toDownA := !preCtrl.IS_CMO_INVAL
         toWriteBackend.size := log2Up(blockSize)
         if(withIntent) {
-          val onCache = preCtrl.IS_CMO_CLEAN && CTRL_CMD.withDataUpC
-          toWriteBackend.copyToCache := onCache
+          val onCache = CTRL_CMD.withDataUpC && (preCtrl.IS_CMO_CLEAN || preCtrl.IS_CMO_INVAL)
+          toWriteBackend.copyToCache := preCtrl.IS_CMO_CLEAN && onCache
 
           when(onCache && doIt) {
             gs.slots.onSel(gsId)(_.pending.cacheWrite := True)
@@ -1224,7 +1225,7 @@ class Cache(val p : CacheParam) extends Component {
             toReadBackend.toWriteBackend := True
           }
 
-          when(CACHE_LINE.dirty || CACHE_LINE.trunk) {
+          when((CACHE_LINE.dirty || CACHE_LINE.trunk) && !preCtrl.IS_CMO_INVAL) {
             askReadBackend := True
             gsPendingVictim := True
             gsPendingVictimReadWrite := True
@@ -1680,8 +1681,13 @@ class Cache(val p : CacheParam) extends Component {
       cache.data.upWrite.data := UP_DATA
       cache.data.upWrite.mask := UP_MASK
 
-      if(withIntent) when(toCacheFork.fire && inserter.LAST && CMD.evict && CMD.copyToCache) {
-        gs.slots.onSel(CMD.gsId)(_.pending.cacheWrite := False)
+      if(withIntent) when(toCacheFork.fire && inserter.LAST && CMD.evict && (CMD.copyToCache || !CMD.toDownA)) {
+        gs.slots.onSel(CMD.gsId) { s =>
+          s.pending.cacheWrite := False
+          when(!CMD.toDownA) {
+            s.pending.victim := False
+          }
+        }
       }
 
       val toDownAFork = forkStream(enabled = CMD.toDownA)
