@@ -892,7 +892,8 @@ class Cache(val p : CacheParam) extends Component {
       val ALLOCATE_ON_MISS = insert(p.allocateOnMiss(CTRL_CMD.opcode, CTRL_CMD.source, CTRL_CMD.address, CTRL_CMD.size, CTRL_CMD.upParam)) //TODO
       val IS_INTENT = insert(List(INTENT()).sContains(CTRL_CMD.opcode))
       val IS_INTENT_CMO = insert(CTRL_CMD.opcode === INTENT && List(Param.Intent.CBO_CLEAN, Param.Intent.CBO_FLUSH, Param.Intent.CBO_INVAL).map(CTRL_CMD.upParam === _).orR)
-      val FROM_A = insert(List(GET(), PUT_FULL_DATA(), PUT_PARTIAL_DATA(), ACQUIRE_BLOCK(), ACQUIRE_PERM(), INTENT(), FLUSH()).sContains(CTRL_CMD.opcode))
+      val IS_PREFETCH = insert(CTRL_CMD.opcode === INTENT && List(Param.Intent.PREFETCH_READ, Param.Intent.PREFETCH_WRITE).map(CTRL_CMD.upParam === _).orR)
+      val FROM_A = insert(List(GET(), PUT_FULL_DATA(), PUT_PARTIAL_DATA(), ACQUIRE_BLOCK(), ACQUIRE_PERM(), INTENT(), FLUSH()).sContains(CTRL_CMD.opcode) && (!IS_INTENT || IS_INTENT_CMO))
       val FROM_C_RELEASE = insert(List(RELEASE(), RELEASE_DATA()).sContains(CTRL_CMD.opcode))
       val GET_PUT = insert(List(GET(), PUT_FULL_DATA(), PUT_PARTIAL_DATA()).sContains(CTRL_CMD.opcode))
       val ACQUIRE = insert(List(ACQUIRE_PERM(), ACQUIRE_BLOCK()).sContains(CTRL_CMD.opcode))
@@ -905,7 +906,7 @@ class Cache(val p : CacheParam) extends Component {
       val IS_PUT = insert(List(PUT_FULL_DATA(), PUT_PARTIAL_DATA()).sContains(CTRL_CMD.opcode))
       val IS_PUT_FULL_BLOCK = insert(CTRL_CMD.opcode === CtrlOpcode.PUT_FULL_DATA && CTRL_CMD.size === log2Up(blockSize))
       val WRITE_DATA = insert(List(PUT_PARTIAL_DATA(), PUT_FULL_DATA(), RELEASE_DATA()).sContains(CTRL_CMD.opcode))
-      val GS_NEED = insert(List(ACQUIRE_BLOCK, ACQUIRE_PERM, RELEASE_DATA, PUT_PARTIAL_DATA, PUT_FULL_DATA, GET, INTENT, FLUSH).map(_.craft()).sContains(CTRL_CMD.opcode))
+      val GS_NEED = insert(List(ACQUIRE_BLOCK, ACQUIRE_PERM, RELEASE_DATA, PUT_PARTIAL_DATA, PUT_FULL_DATA, GET, INTENT, FLUSH).map(_.craft()).sContains(CTRL_CMD.opcode) && (!IS_INTENT || IS_INTENT_CMO))
       val GS_HITS = insert(gs.slots.map(s => s.valid && CTRL_CMD.address(addressCheckRange) === s.address(addressCheckRange)).asBits)
       val GS_HIT = insert(GS_HITS.orR)
       val GS_OH = insert(UIntToOh(CTRL_CMD.gsId, generalSlotCount))
@@ -1003,6 +1004,13 @@ class Cache(val p : CacheParam) extends Component {
       toUpD.denied  := False
       toUpD.corrupt := False
       toUpD.data.assignDontCare()
+      when(preCtrl.IS_INTENT && !preCtrl.IS_INTENT_CMO) {
+        askUpD := True
+        toUpD.opcode := Opcode.D.HINT_ACK
+        toUpD.size := CTRL_CMD.size
+        toUpD.denied := !preCtrl.IS_PREFETCH
+        if(withIntent) askOrdering := preCtrl.IS_PREFETCH
+      }
 
 
       val clearPrimary = False
