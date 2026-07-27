@@ -11,7 +11,7 @@ import spinal.lib.slave
 import spinal.lib.bus.misc.SizeMapping
 import spinal.lib.bus.tilelink.coherent.{CacheFiber, CacheParam, FlushBus, FlushParam, SelfFLush}
 import spinal.lib.bus.tilelink.fabric.{MasterBus, SlaveBus}
-import spinal.lib.bus.tilelink.sim.{Block, MasterAgent, MasterDebugTester, MasterDebugTesterElement, MasterTester}
+import spinal.lib.bus.tilelink.sim.{Block, MasterAgent, MasterDebugTester, MasterDebugTesterElement, MasterTester, TransactionD}
 import spinal.lib.system.tag.PMA
 import spinal.sim.SimThread
 
@@ -19,7 +19,7 @@ import scala.collection.mutable.ArrayBuffer
 
 class CacheTester extends AnyFunSuite{
 
-  def doTest(cp : CacheParam => Unit, flushParam : FlushParam = null): Unit = {
+  def doTest(cp : CacheParam => Unit, flushParam : FlushParam = null, withIntent : Boolean = false): Unit = {
     val tester = new TilelinkTester(
       simConfig = SimConfig,
       cGen = new Component {
@@ -36,7 +36,8 @@ class CacheTester extends AnyFunSuite{
                   acquireB = SizeRange(64),
                   get = SizeRange(1, 64),
                   putFull = SizeRange(1, 64),
-                  putPartial = SizeRange(1, 64)
+                  putPartial = SizeRange(1, 64),
+                  hint = if(withIntent) SizeRange(64) else SizeRange.none
                 )
               ))
             ))
@@ -68,6 +69,7 @@ class CacheTester extends AnyFunSuite{
         directory.parameter.allocateOnMiss = (op, src, addr, size, param) => addr(6)
 //        directory.parameter.selfFlush = SelfFLush(0x10000, 0x10000+0x400, 2000)
         directory.parameter.flushCompletionsCount = 4
+        directory.parameter.withIntent = withIntent
         cp(directory.parameter)
         directory.up << m0.node
         directory.ctrl at (0x00, 0x100) of ctrl.node
@@ -177,6 +179,28 @@ class CacheTester extends AnyFunSuite{
 
 
         assert(m0.getInt(0, address) == 0x2)
+      }
+    }
+
+    if(withIntent) {
+      tester.doSim("IntentPrefetch") { tb =>
+        val m0 = tb.mastersStuff(0).agent
+        tb.mastersStuff.foreach(_.agent.driver.driver.noStall())
+        tb.slavesStuff.foreach(_.model.driver.driver.noStall())
+        m0.prefetchRead(0, 0x10400, 64)
+        m0.prefetchWrite(0, 0x10400, 64)
+        tb.waitCheckers()
+      }
+
+      tester.doSim("CMOIntent") { tb =>
+        val m0 = tb.mastersStuff(0).agent
+        tb.mastersStuff.foreach(_.agent.driver.driver.noStall())
+        tb.slavesStuff.foreach(_.model.driver.driver.noStall())
+        def doCmoFlush(sourceId: Int, address: Int, needInterrupt: Boolean): Unit = {
+          assertHintAck(m0.cboFlush(sourceId, address, 64), sourceId, denied = false)
+        }
+        flushCheck(tb, m0, doCmoFlush)
+        tb.waitCheckers()
       }
     }
 
@@ -314,5 +338,9 @@ class CacheTester extends AnyFunSuite{
     test(name + " flush") {
       doTest(cp, FlushParam(32, 2))
     }
+  }
+
+  test("intent") {
+    doTest({p => }, null, withIntent = true)
   }
 }
