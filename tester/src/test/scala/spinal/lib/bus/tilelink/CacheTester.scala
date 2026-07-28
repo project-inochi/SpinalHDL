@@ -18,6 +18,15 @@ import spinal.sim.SimThread
 import scala.collection.mutable.ArrayBuffer
 
 class CacheTester extends AnyFunSuite{
+  object CmoOp {
+    val CLEAN = 0x1
+    val FLUSH = 0x2
+  }
+
+  case class CmoCompatible(
+    clean     : Boolean,
+    flush     : Boolean,
+  )
 
   def doTest(cp : CacheParam => Unit, flushParam : FlushParam = null, withIntent : Boolean = false): Unit = {
     val tester = new TilelinkTester(
@@ -142,43 +151,80 @@ class CacheTester extends AnyFunSuite{
       }
     }
 
-    def flushCheck[T <: Component](tb: TilelinkTestbenchBase[T], m0: MasterAgent, doFlush: (Int, Int, Boolean) => Unit) = {
-      for(address <- List(0x10000, 0x10040)) {
+    def cmoCheck[T <: Component](tb: TilelinkTestbenchBase[T], m0: MasterAgent, compatible: CmoCompatible, doCmo: (Int, Int, Int, Boolean) => Unit) = {
+      val base = 0x10000
+
+      if(compatible.flush) {
+        for(address <- List(base, base + 0x40)) {
+          val offset = address - 0x10000
+          var block: Block = null
+
+          // Dirty
+          m0.putInt(0, address, 0x1)
+          assert(tb.slavesStuff(0).model.mem.readInt(offset) != 0x1)
+          doCmo(0, address, CmoOp.FLUSH, false)
+          assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+
+          // Clean
+          m0.getInt(0, address)
+          assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+          doCmo(0, address, CmoOp.FLUSH, false)
+          assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+
+          // Clean probe
+          block = m0.acquireBlock(0, Param.Grow.NtoT, address, 0x40)
+          doCmo(0, address, CmoOp.FLUSH, true)
+          assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+
+          // Clean probe2
+          block = m0.acquireBlock(0, Param.Grow.NtoT, address, 0x40)
+          m0.release(0, Param.Cap.toB, block)
+          doCmo(0, address, CmoOp.FLUSH, true)
+          assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+
+          // Dirty probe
+          block = m0.acquireBlock(0, Param.Grow.NtoT, address, 0x40)
+          block.data(0) = 0x02
+          block.dirty = true
+          doCmo(0, address, CmoOp.FLUSH, true)
+          assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x2)
+
+          assert(m0.getInt(0, address) == 0x2)
+        }
+      }
+
+      if(compatible.clean) {
+        val address = base + 0xc0
         val offset = address - 0x10000
-        var block : Block = null
+        var block: Block = null
 
-        // Dirty
-        m0.putInt(0, address, 0x1)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) != 0x1)
-        doFlush(0, address, false)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+        // WC-CLEAN
+        m0.putInt(0, address, 0x21)
+        doCmo(0, address, CmoOp.CLEAN, false)
+        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x21)
+        assert(m0.getInt(0, address) == 0x21)
 
-        // Clean
-        m0.getInt(0, address)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
-        doFlush(0, address, false)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+        // CLEAN
+        val cleanValue = m0.getInt(0, address)
+        doCmo(0, address, CmoOp.CLEAN, false)
+        assert(m0.getInt(0, address) == cleanValue)
 
-        // Clean probe
+        // Permission
         block = m0.acquireBlock(0, Param.Grow.NtoT, address, 0x40)
-        doFlush(0, address, true)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
+        block.dirty = false
+        doCmo(0, address, CmoOp.CLEAN, false)
+        assert(block.cap == Param.Cap.toB)
+        assert(!block.dirty)
 
-        // Clean probe2
+        // WC-CLEAN
         block = m0.acquireBlock(0, Param.Grow.NtoT, address, 0x40)
-        m0.release(0, Param.Cap.toB, block)
-        doFlush(0, address, true)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x1)
-
-        // Dirty probe
-        block = m0.acquireBlock(0, Param.Grow.NtoT, address, 0x40)
-        block.data(0) = 0x02
+        block.data(0) = 0x22
         block.dirty = true
-        doFlush(0, address, true)
-        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x2)
-
-
-        assert(m0.getInt(0, address) == 0x2)
+        doCmo(0, address, CmoOp.CLEAN, false)
+        assert(tb.slavesStuff(0).model.mem.readInt(offset) == 0x22)
+        assert(block.cap == Param.Cap.toB)
+        assert(!block.dirty)
+        assert(m0.getInt(0, address) == 0x22)
       }
     }
 
@@ -196,10 +242,20 @@ class CacheTester extends AnyFunSuite{
         val m0 = tb.mastersStuff(0).agent
         tb.mastersStuff.foreach(_.agent.driver.driver.noStall())
         tb.slavesStuff.foreach(_.model.driver.driver.noStall())
-        def doCmoFlush(sourceId: Int, address: Int, needInterrupt: Boolean): Unit = {
-          assertHintAck(m0.cboFlush(sourceId, address, 64), sourceId, denied = false)
+        def doCmo(sourceId: Int, address: Int, op: Int, needInterrupt: Boolean): Unit = {
+          val response = op match {
+            case CmoOp.CLEAN      => m0.cboClean(sourceId, address, 64)
+            case CmoOp.FLUSH      => m0.cboFlush(sourceId, address, 64)
+            case _ => ??? // No INVAL support
+          }
+          assert(!response.denied)
         }
-        flushCheck(tb, m0, doCmoFlush)
+
+        val compatible = CmoCompatible(
+          clean      = true,
+          flush      = true,
+        )
+        cmoCheck(tb, m0, compatible, doCmo)
         tb.waitCheckers()
       }
     }
@@ -278,9 +334,13 @@ class CacheTester extends AnyFunSuite{
       if(flushParam != null) initFlushBus(tb.dut.flush)
       val m0 = tb.mastersStuff(0).agent
 
-      def doFlushWithCtrl(sourceId : Int, address : Int, needInterrupt: Boolean): Unit = doFlush(ctrl, sourceId, address, 0x40, if (needInterrupt) tb.dut.ctrlInterrupt else null)
+      def doFlushWithCtrl(sourceId : Int, address : Int, op: Int, needInterrupt: Boolean): Unit = doFlush(ctrl, sourceId, address, 0x40, if (needInterrupt) tb.dut.ctrlInterrupt else null)
 
-      flushCheck(tb, m0, doFlushWithCtrl)
+      val compatible = CmoCompatible(
+        clean      = false,
+        flush      = true,
+      )
+      cmoCheck(tb, m0, compatible, doFlushWithCtrl)
     }
 
     if(flushParam != null) tester.doSim("flushBus") { tb =>
@@ -288,7 +348,7 @@ class CacheTester extends AnyFunSuite{
       val flush = tb.dut.flush
       val m0 = tb.mastersStuff(0).agent
 
-      def doFlushWithBus(sourceId : Int, address : Int, needInterrupt: Boolean): Unit = {
+      def doFlushWithBus(sourceId : Int, address : Int, op: Int, needInterrupt: Boolean): Unit = {
         flush.cmd.valid #= true
         flush.cmd.address #= address
         flush.cmd.source #= sourceId
@@ -298,7 +358,11 @@ class CacheTester extends AnyFunSuite{
         m0.cd.waitSampling()
       }
 
-      flushCheck(tb, m0, doFlushWithBus)
+      val compatible = CmoCompatible(
+        clean      = false,
+        flush      = true,
+      )
+      cmoCheck(tb, m0, compatible, doFlushWithBus)
 
       tb.waitCheckers()
     }
